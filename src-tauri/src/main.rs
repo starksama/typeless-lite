@@ -5,12 +5,12 @@ use std::{
     io::BufWriter,
     path::PathBuf,
     process::Command,
-    thread,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
     },
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    thread,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -25,6 +25,7 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 
 const APP_STATUS_EVENT: &str = "runtime-status";
 const CLIPBOARD_RESTORE_DELAY_MS: u64 = 150;
+const MIN_RECORDING_MS: u128 = 400;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct Settings {
@@ -33,7 +34,13 @@ struct Settings {
     hotkey: String,
     whisper_model: String,
     format_model: String,
+    #[serde(default = "default_format_enabled")]
+    format_enabled: bool,
     api_base_url: String,
+}
+
+fn default_format_enabled() -> bool {
+    true
 }
 
 impl Default for Settings {
@@ -44,6 +51,7 @@ impl Default for Settings {
             hotkey: "Cmd+Shift+Space".to_string(),
             whisper_model: "whisper-1".to_string(),
             format_model: "gpt-4o-mini".to_string(),
+            format_enabled: true,
             api_base_url: "https://api.openai.com/v1".to_string(),
         }
     }
@@ -67,6 +75,7 @@ struct RecorderSession {
     stream: cpal::Stream,
     writer: Arc<Mutex<Option<hound::WavWriter<BufWriter<std::fs::File>>>>>,
     path: PathBuf,
+    started_at: Instant,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -82,7 +91,8 @@ enum AppError {
 }
 
 impl RecorderSession {
-    fn stop(self) -> Result<PathBuf, AppError> {
+    fn stop(self) -> Result<(PathBuf, Duration), AppError> {
+        let elapsed = self.started_at.elapsed();
         drop(self.stream);
         let mut writer_lock = self
             .writer
@@ -93,7 +103,7 @@ impl RecorderSession {
                 .finalize()
                 .map_err(|e| AppError::Message(format!("Failed to finalize WAV: {e}")))?;
         }
-        Ok(self.path)
+        Ok((self.path, elapsed))
     }
 }
 
@@ -256,7 +266,19 @@ fn toggle_recording_inner(app: &AppHandle, state: &State<AppState>) -> Result<()
     };
 
     if let Some(session) = maybe_session {
-        let wav_path = session.stop().map_err(|e| e.to_string())?;
+        let (wav_path, elapsed) = session.stop().map_err(|e| e.to_string())?;
+        if elapsed.as_millis() < MIN_RECORDING_MS {
+            let _ = fs::remove_file(&wav_path);
+            set_status(
+                app,
+                state,
+                Some(false),
+                Some(false),
+                "Recording too short — hold hotkey and speak longer.".to_string(),
+            );
+            return Ok(());
+        }
+
         set_status(
             app,
             state,
@@ -363,6 +385,7 @@ fn start_recording() -> Result<RecorderSession, AppError> {
         stream,
         writer,
         path,
+        started_at: Instant::now(),
     })
 }
 
@@ -413,30 +436,48 @@ async fn process_audio_pipeline(
     state: &State<'_, AppState>,
     wav_path: PathBuf,
 ) -> Result<(), AppError> {
-    let settings = state
-        .settings
-        .lock()
-        .map_err(|_| AppError::Message("Failed to lock settings".to_string()))?
-        .clone();
+    let pipeline_result = async {
+        let settings = state
+            .settings
+            .lock()
+            .map_err(|_| AppError::Message("Failed to lock settings".to_string()))?
+            .clone();
 
-    if settings.api_key.is_empty() {
-        return Err(AppError::Message(
-            "Missing API key. Save it in settings first.".to_string(),
-        ));
+        if settings.api_key.is_empty() {
+            return Err(AppError::Message(
+                "Missing API key. Save it in settings first.".to_string(),
+            ));
+        }
+
+        let transcription = transcribe_audio(&settings, &wav_path).await?;
+        let output_text = if settings.format_enabled {
+            format_transcript(&settings, &transcription).await?
+        } else {
+            transcription
+        };
+        paste_text(&output_text)?;
+
+        Ok::<(), AppError>(())
+    };
+    let result = pipeline_result.await;
+    if let Err(cleanup_error) = fs::remove_file(&wav_path) {
+        if !wav_path.exists() {
+            // Ignore if already removed by external factors.
+        } else if result.is_ok() {
+            return Err(AppError::Message(format!(
+                "Finished processing, but failed to delete temp file: {cleanup_error}"
+            )));
+        }
     }
 
-    let transcription = transcribe_audio(&settings, &wav_path).await?;
-    let formatted = format_transcript(&settings, &transcription).await?;
-    paste_text(&formatted)?;
-
-    let _ = fs::remove_file(&wav_path);
+    result?;
 
     set_status(
         app,
         state,
         Some(false),
         Some(false),
-        "Inserted formatted text into focused app.".to_string(),
+        "Inserted text into focused app.".to_string(),
     );
 
     Ok(())
