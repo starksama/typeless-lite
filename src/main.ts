@@ -18,10 +18,21 @@ type RuntimeStatus = {
   last_message: string;
 };
 
+type AccessibilityPermissionStatus = {
+  platform: string;
+  is_supported: boolean;
+  is_granted: boolean;
+  status: string;
+  guidance: string;
+};
+
 const statusEl = document.querySelector<HTMLParagraphElement>('#status')!;
+const accessibilityStatusEl = document.querySelector<HTMLParagraphElement>('#accessibility-status')!;
 const form = document.querySelector<HTMLFormElement>('#settings-form')!;
 const toggleBtn = document.querySelector<HTMLButtonElement>('#toggle-btn')!;
 const testApiBtn = document.querySelector<HTMLButtonElement>('#test-api-btn')!;
+const checkAccessibilityBtn = document.querySelector<HTMLButtonElement>('#check-accessibility-btn')!;
+const openAccessibilitySettingsBtn = document.querySelector<HTMLButtonElement>('#open-accessibility-settings-btn')!;
 const apiKeyInput = document.querySelector<HTMLInputElement>('#apiKey')!;
 const promptTemplateInput = document.querySelector<HTMLTextAreaElement>('#promptTemplate')!;
 const hotkeyInput = document.querySelector<HTMLInputElement>('#hotkey')!;
@@ -39,6 +50,15 @@ function renderStatus(status: RuntimeStatus): void {
   if (status.is_processing) parts.push('Processing');
   const state = parts.length ? parts.join(' + ') : 'Idle';
   statusEl.textContent = `${state}: ${status.last_message}`;
+}
+
+function renderAccessibilityStatus(status: AccessibilityPermissionStatus): void {
+  const label = status.is_supported
+    ? status.is_granted
+      ? 'Granted'
+      : 'Not granted'
+    : 'Unsupported';
+  accessibilityStatusEl.textContent = `[${label}] ${status.guidance}`;
 }
 
 async function loadInitial(): Promise<void> {
@@ -93,6 +113,31 @@ testApiBtn.addEventListener('click', async () => {
     statusEl.textContent = String(error);
   } finally {
     testApiBtn.disabled = false;
+  }
+});
+
+checkAccessibilityBtn.addEventListener('click', async () => {
+  checkAccessibilityBtn.disabled = true;
+  accessibilityStatusEl.textContent = 'Checking Accessibility permission...';
+  try {
+    const permissionStatus = await invoke<AccessibilityPermissionStatus>('check_accessibility_permission');
+    renderAccessibilityStatus(permissionStatus);
+  } catch (error) {
+    accessibilityStatusEl.textContent = `Accessibility check failed: ${String(error)}`;
+  } finally {
+    checkAccessibilityBtn.disabled = false;
+  }
+});
+
+openAccessibilitySettingsBtn.addEventListener('click', async () => {
+  openAccessibilitySettingsBtn.disabled = true;
+  try {
+    const message = await invoke<string>('open_accessibility_settings');
+    accessibilityStatusEl.textContent = message;
+  } catch (error) {
+    accessibilityStatusEl.textContent = `Failed to open settings: ${String(error)}`;
+  } finally {
+    openAccessibilitySettingsBtn.disabled = false;
   }
 });
 

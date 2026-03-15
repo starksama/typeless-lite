@@ -97,6 +97,7 @@ yarn tauri:build
 
 2. Accessibility (for keystroke paste automation):
 - System Settings -> Privacy & Security -> Accessibility -> allow Typeless Lite.
+- In-app helper: use `Check Accessibility` to confirm current status and `Open Accessibility Settings` to jump directly to the right macOS settings pane.
 
 If paste fails but transcript/formatting succeed, Accessibility permission is usually missing.
 

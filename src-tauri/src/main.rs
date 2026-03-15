@@ -65,6 +65,15 @@ struct RuntimeStatus {
     last_message: String,
 }
 
+#[derive(Debug, Serialize)]
+struct AccessibilityPermissionStatus {
+    platform: String,
+    is_supported: bool,
+    is_granted: bool,
+    status: String,
+    guidance: String,
+}
+
 struct AppState {
     settings: Mutex<Settings>,
     runtime_status: Mutex<RuntimeStatus>,
@@ -238,6 +247,118 @@ async fn test_api_connection(state: State<'_, AppState>) -> Result<String, Strin
             "Connection failed ({status}). API response: {}",
             summarize_http_body(&body)
         )),
+    }
+}
+
+#[tauri::command]
+fn check_accessibility_permission() -> AccessibilityPermissionStatus {
+    #[cfg(target_os = "macos")]
+    {
+        let output = Command::new("osascript")
+            .arg("-e")
+            .arg("tell application \"System Events\" to return UI elements enabled")
+            .output();
+
+        match output {
+            Ok(result) if result.status.success() => {
+                let response = String::from_utf8_lossy(&result.stdout).trim().to_lowercase();
+                if response == "true" {
+                    AccessibilityPermissionStatus {
+                        platform: "macOS".to_string(),
+                        is_supported: true,
+                        is_granted: true,
+                        status: "granted".to_string(),
+                        guidance: "Accessibility permission is granted.".to_string(),
+                    }
+                } else if response == "false" {
+                    AccessibilityPermissionStatus {
+                        platform: "macOS".to_string(),
+                        is_supported: true,
+                        is_granted: false,
+                        status: "missing".to_string(),
+                        guidance: "Accessibility permission is not granted. Open System Settings > Privacy & Security > Accessibility and enable Typeless Lite."
+                            .to_string(),
+                    }
+                } else {
+                    AccessibilityPermissionStatus {
+                        platform: "macOS".to_string(),
+                        is_supported: true,
+                        is_granted: false,
+                        status: "unknown".to_string(),
+                        guidance: format!(
+                            "Could not determine permission status (unexpected response: '{response}'). Open Accessibility settings and verify Typeless Lite is enabled."
+                        ),
+                    }
+                }
+            }
+            Ok(result) => {
+                let stderr = String::from_utf8_lossy(&result.stderr).trim().to_string();
+                AccessibilityPermissionStatus {
+                    platform: "macOS".to_string(),
+                    is_supported: true,
+                    is_granted: false,
+                    status: "error".to_string(),
+                    guidance: format!(
+                        "Permission check failed. Open Accessibility settings and verify Typeless Lite is enabled. {}",
+                        if stderr.is_empty() {
+                            "".to_string()
+                        } else {
+                            format!("Details: {stderr}")
+                        }
+                    )
+                    .trim()
+                    .to_string(),
+                }
+            }
+            Err(error) => AccessibilityPermissionStatus {
+                platform: "macOS".to_string(),
+                is_supported: true,
+                is_granted: false,
+                status: "error".to_string(),
+                guidance: format!(
+                    "Permission check failed to run. Open Accessibility settings manually and verify Typeless Lite is enabled. Details: {error}"
+                ),
+            },
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        AccessibilityPermissionStatus {
+            platform: std::env::consts::OS.to_string(),
+            is_supported: false,
+            is_granted: false,
+            status: "unsupported".to_string(),
+            guidance: "Accessibility permission checks are currently implemented for macOS only."
+                .to_string(),
+        }
+    }
+}
+
+#[tauri::command]
+fn open_accessibility_settings() -> Result<String, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let urls = [
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+            "x-apple.systempreferences:com.apple.preference.security?Privacy",
+        ];
+
+        for url in urls {
+            match Command::new("open").arg(url).status() {
+                Ok(status) if status.success() => {
+                    return Ok("Opened macOS Privacy settings. Go to Accessibility and enable Typeless Lite.".to_string());
+                }
+                _ => {}
+            }
+        }
+
+        Err("Failed to open macOS Accessibility settings automatically. Open System Settings > Privacy & Security > Accessibility manually.".to_string())
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err("Opening Accessibility settings is only supported on macOS in this app.".to_string())
     }
 }
 
@@ -829,7 +950,9 @@ fn main() {
             save_settings,
             get_runtime_status,
             toggle_recording,
-            test_api_connection
+            test_api_connection,
+            check_accessibility_permission,
+            open_accessibility_settings
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
