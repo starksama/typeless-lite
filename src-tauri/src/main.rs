@@ -21,6 +21,7 @@ use tauri::{
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
 const APP_STATUS_EVENT: &str = "runtime-status";
+const TRAY_ID: &str = "main-tray";
 const CLIPBOARD_RESTORE_DELAY_MS: u64 = 150;
 const MIN_RECORDING_MS: u128 = 400;
 
@@ -222,7 +223,33 @@ fn set_status(
             status.is_processing = v;
         }
         status.last_message = message;
+        update_tray_status(app, &status);
         let _ = app.emit(APP_STATUS_EVENT, status.clone());
+    }
+}
+
+fn tray_state_label(status: &RuntimeStatus) -> &'static str {
+    if status.is_recording {
+        "Recording"
+    } else if status.is_processing {
+        "Processing"
+    } else {
+        "Idle"
+    }
+}
+
+fn update_tray_status(app: &AppHandle, status: &RuntimeStatus) {
+    let Some(tray) = app.tray_by_id(TRAY_ID) else {
+        return;
+    };
+
+    let state_label = tray_state_label(status);
+    let tooltip = format!("Typeless Lite - {state_label}");
+    let _ = tray.set_tooltip(Some(tooltip));
+
+    #[cfg(target_os = "macos")]
+    {
+        let _ = tray.set_title(Some(state_label));
     }
 }
 
@@ -671,7 +698,7 @@ fn main() {
             let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&open_item, &toggle_item, &quit_item])?;
 
-            let _tray = TrayIconBuilder::new()
+            let _tray = TrayIconBuilder::with_id(TRAY_ID)
                 .menu(&menu)
                 .tooltip("Typeless Lite")
                 .show_menu_on_left_click(false)
