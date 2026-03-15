@@ -690,8 +690,19 @@ async fn process_audio_pipeline(
         }
 
         let transcription = transcribe_audio(&state.http_client, &settings, &wav_path).await?;
+        let active_app_name = if settings.format_enabled {
+            detect_frontmost_app_name()
+        } else {
+            None
+        };
         let output_text = if settings.format_enabled {
-            format_transcript(&state.http_client, &settings, &transcription).await?
+            format_transcript(
+                &state.http_client,
+                &settings,
+                &transcription,
+                active_app_name.as_deref(),
+            )
+            .await?
         } else {
             transcription
         };
@@ -766,13 +777,15 @@ async fn format_transcript(
     client: &reqwest::Client,
     settings: &Settings,
     transcript: &str,
+    active_app_name: Option<&str>,
 ) -> Result<String, AppError> {
     let url = format!("{}/chat/completions", settings.api_base_url);
+    let system_prompt = build_formatter_system_prompt(&settings.prompt_template, active_app_name);
     let request_body = serde_json::json!({
       "model": settings.format_model,
       "temperature": 0,
       "messages": [
-        {"role":"system","content": settings.prompt_template},
+        {"role":"system","content": system_prompt},
         {"role":"user","content": transcript}
       ]
     });
@@ -803,6 +816,43 @@ async fn format_transcript(
         .filter(|s| !s.is_empty())
         .ok_or_else(|| AppError::Message("No formatter output text received".to_string()))?;
     Ok(content)
+}
+
+fn build_formatter_system_prompt(base_prompt: &str, active_app_name: Option<&str>) -> String {
+    if let Some(app_name) = active_app_name.map(str::trim).filter(|name| !name.is_empty()) {
+        return format!(
+            "{base_prompt}\n\nCurrent target app context: {app_name}. Adjust formatting style to feel natural for this app while preserving intent. Return only final text."
+        );
+    }
+
+    base_prompt.to_string()
+}
+
+#[cfg(target_os = "macos")]
+fn detect_frontmost_app_name() -> Option<String> {
+    let output = Command::new("osascript")
+        .arg("-e")
+        .arg(
+            "tell application \"System Events\" to get name of first application process whose frontmost is true",
+        )
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let app_name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if app_name.is_empty() {
+        return None;
+    }
+
+    Some(app_name)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn detect_frontmost_app_name() -> Option<String> {
+    None
 }
 
 fn paste_text(text: &str) -> Result<(), AppError> {

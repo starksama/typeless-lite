@@ -52,6 +52,7 @@ This MVP implements exactly that flow on macOS with Tauri and minimal UI.
 - WAV recording from default input device
 - transcription via `/v1/audio/transcriptions`
 - LLM formatting pass via `/v1/chat/completions`
+- formatter prompt is automatically augmented with the current frontmost macOS app name (when available) to adapt style for the target app
 - optional fast mode to skip LLM formatting and paste raw transcript
 - paste into focused app using clipboard + `Cmd+V` fallback path
 - paste is non-destructive for text clipboard contents (restored shortly after simulated `Cmd+V`)
@@ -110,7 +111,7 @@ Open the app window and configure:
 - `Formatter Model` (default `gpt-4o-mini`)
 - `Run LLM formatting pass` (on by default; disable for lower latency/cost)
 - `Global Hotkey` (default `Cmd+Shift+Space`)
-- `Prompt Template` (formatting instruction)
+- `Prompt Template` (base formatting instruction; app context is appended automatically on macOS when detected)
 
 ## Security Notes
 
