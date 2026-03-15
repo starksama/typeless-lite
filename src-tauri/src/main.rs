@@ -22,7 +22,9 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 
 const APP_STATUS_EVENT: &str = "runtime-status";
 const TRAY_ID: &str = "main-tray";
-const CLIPBOARD_RESTORE_DELAY_MS: u64 = 150;
+const PRE_PASTE_DELAY_MS: u64 = 60;
+const PASTE_RETRY_BACKOFF_MS: u64 = 45;
+const CLIPBOARD_RESTORE_DELAY_MS: u64 = 300;
 const MIN_RECORDING_MS: u128 = 400;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -603,11 +605,25 @@ fn paste_text(text: &str) -> Result<(), AppError> {
         .set_text(text.to_string())
         .map_err(|e| AppError::Message(format!("Clipboard write failed: {e}")))?;
 
-    let output = Command::new("osascript")
-        .arg("-e")
-        .arg("tell application \"System Events\" to keystroke \"v\" using command down")
-        .output()
-        .map_err(|e| AppError::Message(format!("Failed to run osascript: {e}")))?;
+    thread::sleep(Duration::from_millis(PRE_PASTE_DELAY_MS));
+
+    let run_paste_keystroke = || {
+        Command::new("osascript")
+            .arg("-e")
+            .arg("tell application \"System Events\" to keystroke \"v\" using command down")
+            .output()
+            .map_err(|e| AppError::Message(format!("Failed to run osascript: {e}")))
+    };
+
+    let mut output = run_paste_keystroke();
+    if match &output {
+        Ok(paste_output) => !paste_output.status.success(),
+        Err(_) => true,
+    } {
+        thread::sleep(Duration::from_millis(PASTE_RETRY_BACKOFF_MS));
+        output = run_paste_keystroke();
+    }
+    let output = output?;
 
     restore_clipboard_after_delay(original_text);
 
