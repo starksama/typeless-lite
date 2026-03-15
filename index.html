@@ -49,6 +49,11 @@
           </label>
 
           <label class="checkbox-label">
+            <input id="includeClipboardContext" type="checkbox" checked />
+            Include current clipboard text as optional formatter context (privacy: sent to provider only when formatting runs)
+          </label>
+
+          <label class="checkbox-label">
             <input id="playSoundCues" type="checkbox" checked />
             Play subtle sound cues (start/success/error)
           </label>
@@ -77,7 +82,7 @@
       </section>
 
       <p class="hint">On macOS, grant Accessibility + Microphone permissions for best results.</p>
-      <p class="hint">Privacy: optional clipboard reference context is used transiently during formatting and is not stored by the app.</p>
+      <p class="hint">Privacy: clipboard context is optional, never stored by the app, and only sent when both formatting and clipboard context are enabled.</p>
     </main>
   </body>
 </html>

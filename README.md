@@ -111,6 +111,7 @@ Open the app window and configure:
 - `Whisper Model` (default `whisper-1`)
 - `Formatter Model` (default `gpt-4o-mini`)
 - `Run LLM formatting pass` (on by default; disable for lower latency/cost)
+- `Include clipboard context for formatter` (on by default; when enabled, clipboard text may be sent as optional context during formatting)
 - `Play subtle sound cues` (on by default; start/success/error earcons on macOS)
 - `Global Hotkey` (default `Cmd+Shift+Space`)
 - `Prompt Template` (base formatting instruction; runtime context hints are appended automatically)
@@ -118,7 +119,7 @@ Open the app window and configure:
 ## Security Notes
 
 - API keys are user-provided and saved locally in app config.
-- Optional clipboard reference context is used transiently for formatting only and is not stored by the app.
+- Optional clipboard reference context is used transiently for formatting only, is never stored by the app, and is only sent when both `Run LLM formatting pass` and `Include clipboard context for formatter` are enabled.
 - No secrets are hardcoded.
 - `.env.example` is provided only as a template.
 

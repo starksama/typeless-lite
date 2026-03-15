@@ -39,6 +39,8 @@ struct Settings {
     format_model: String,
     #[serde(default = "default_format_enabled")]
     format_enabled: bool,
+    #[serde(default = "default_include_clipboard_context")]
+    include_clipboard_context: bool,
     #[serde(default = "default_play_sound_cues")]
     play_sound_cues: bool,
     api_base_url: String,
@@ -52,6 +54,10 @@ fn default_play_sound_cues() -> bool {
     true
 }
 
+fn default_include_clipboard_context() -> bool {
+    true
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -61,6 +67,7 @@ impl Default for Settings {
             whisper_model: "whisper-1".to_string(),
             format_model: "gpt-4o-mini".to_string(),
             format_enabled: true,
+            include_clipboard_context: true,
             play_sound_cues: true,
             api_base_url: "https://api.openai.com/v1".to_string(),
         }
@@ -740,7 +747,7 @@ async fn process_audio_pipeline(
         } else {
             None
         };
-        let clipboard_reference = if settings.format_enabled {
+        let clipboard_reference = if settings.format_enabled && settings.include_clipboard_context {
             capture_clipboard_reference_context()
         } else {
             None
