@@ -1,6 +1,6 @@
 # Typeless Lite (Tauri MVP)
 
-A tiny mac desktop app inspired by Typeless: press a global hotkey, speak, transcribe with Whisper, run an LLM formatting pass, then paste into the currently focused app.
+A tiny mac desktop app inspired by Typeless: hold a global hotkey, speak, transcribe with Whisper, run an LLM formatting pass, then paste into the currently focused app.
 
 ## What Typeless Does (Research Summary)
 
@@ -48,10 +48,11 @@ This MVP implements exactly that flow on macOS with Tauri and minimal UI.
 ## MVP Scope Implemented
 
 - mac desktop first (Tauri v2 scaffold)
-- global hotkey toggle for mic start/stop
+- global hotkey hold-to-talk (press to start, release to stop)
 - WAV recording from default input device
 - transcription via `/v1/audio/transcriptions`
 - LLM formatting pass via `/v1/chat/completions`
+- optional fast mode to skip LLM formatting and paste raw transcript
 - paste into focused app using clipboard + `Cmd+V` fallback path
 - paste is non-destructive for text clipboard contents (restored shortly after simulated `Cmd+V`)
 - tray menu for open/toggle/quit
@@ -106,6 +107,7 @@ Open the app window and configure:
 - `API Base URL` (default `https://api.openai.com/v1`; supports compatible providers)
 - `Whisper Model` (default `whisper-1`)
 - `Formatter Model` (default `gpt-4o-mini`)
+- `Run LLM formatting pass` (on by default; disable for lower latency/cost)
 - `Global Hotkey` (default `Cmd+Shift+Space`)
 - `Prompt Template` (formatting instruction)
 

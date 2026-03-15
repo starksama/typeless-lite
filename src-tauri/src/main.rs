@@ -5,10 +5,7 @@ use std::{
     io::BufWriter,
     path::PathBuf,
     process::Command,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
-    },
+    sync::{Arc, Mutex},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -19,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
-    AppHandle, Manager, State,
+    AppHandle, Emitter, Manager, State,
 };
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
@@ -77,6 +74,11 @@ struct RecorderSession {
     path: PathBuf,
     started_at: Instant,
 }
+
+// cpal's CoreAudio stream type does not implement Send/Sync on macOS even though this app
+// only accesses it behind a Mutex and never shares mutable access concurrently.
+unsafe impl Send for RecorderSession {}
+unsafe impl Sync for RecorderSession {}
 
 #[derive(thiserror::Error, Debug)]
 enum AppError {
@@ -259,7 +261,7 @@ fn toggle_recording_inner(app: &AppHandle, state: &State<AppState>) -> Result<()
                 state,
                 Some(true),
                 Some(false),
-                "Recording... press hotkey again to stop".to_string(),
+                "Recording... release hotkey to stop (or toggle manually).".to_string(),
             );
             return Ok(());
         }
@@ -621,10 +623,6 @@ fn main() {
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
-                    if event.state != ShortcutState::Pressed {
-                        return;
-                    }
-
                     let state: State<AppState> = app.state();
                     let active_shortcut = state
                         .current_shortcut
@@ -634,7 +632,16 @@ fn main() {
                         .unwrap_or_else(default_hotkey);
 
                     if shortcut == &active_shortcut {
-                        let _ = toggle_recording_inner(app, &state);
+                        let is_recording = state.recorder.lock().ok().is_some_and(|r| r.is_some());
+                        match event.state {
+                            ShortcutState::Pressed if !is_recording => {
+                                let _ = toggle_recording_inner(app, &state);
+                            }
+                            ShortcutState::Released if is_recording => {
+                                let _ = toggle_recording_inner(app, &state);
+                            }
+                            _ => {}
+                        }
                     }
                 })
                 .build(),
