@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Typeless Lite</title>
+    <script type="module" src="/src/main.ts" defer></script>
+  </head>
+  <body>
+    <main>
+      <h1>Typeless Lite</h1>
+      <p>Speak with the global hotkey, then auto-paste formatted text into your active app.</p>
+
+      <section>
+        <h2>Status</h2>
+        <p id="status">Loading...</p>
+      </section>
+
+      <section>
+        <h2>Settings</h2>
+        <form id="settings-form">
+          <label>
+            OpenAI API Key
+            <input id="apiKey" type="password" autocomplete="off" placeholder="sk-..." required />
+          </label>
+
+          <label>
+            Whisper Model
+            <input id="whisperModel" type="text" value="whisper-1" required />
+          </label>
+
+          <label>
+            Formatter Model
+            <input id="formatModel" type="text" value="gpt-4o-mini" required />
+          </label>
+
+          <label class="checkbox-label">
+            <input id="formatEnabled" type="checkbox" checked />
+            Run LLM formatting pass (slower, cleaner output)
+          </label>
+
+          <label>
+            API Base URL
+            <input id="apiBaseUrl" type="text" value="https://api.openai.com/v1" required />
+          </label>
+
+          <label>
+            Global Hotkey
+            <input id="hotkey" type="text" value="Cmd+Shift+Space" required />
+          </label>
+
+          <label>
+            Prompt Template
+            <textarea id="promptTemplate" rows="6" required></textarea>
+          </label>
+
+          <div class="buttons">
+            <button type="submit">Save</button>
+            <button id="test-api-btn" type="button">Test API Connection</button>
+            <button id="toggle-btn" type="button">Start / Stop Recording</button>
+          </div>
+        </form>
+      </section>
+
+      <p class="hint">On macOS, grant Accessibility + Microphone permissions for best results.</p>
+    </main>
+  </body>
+</html>

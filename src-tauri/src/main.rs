@@ -26,6 +26,7 @@ const PRE_PASTE_DELAY_MS: u64 = 60;
 const PASTE_RETRY_BACKOFF_MS: u64 = 45;
 const CLIPBOARD_RESTORE_DELAY_MS: u64 = 300;
 const MIN_RECORDING_MS: u128 = 400;
+const API_TEST_TIMEOUT_SECS: u64 = 6;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct Settings {
@@ -181,6 +182,65 @@ fn toggle_recording(app: AppHandle, state: State<AppState>) -> Result<(), String
     toggle_recording_inner(&app, &state)
 }
 
+#[tauri::command]
+async fn test_api_connection(state: State<'_, AppState>) -> Result<String, String> {
+    let settings = state
+        .settings
+        .lock()
+        .map_err(|_| "Failed to access settings".to_string())?
+        .clone();
+
+    let api_key = settings.api_key.trim();
+    if api_key.is_empty() {
+        return Err("API key is missing. Add your API key and save settings first.".to_string());
+    }
+
+    let base_url = settings.api_base_url.trim().trim_end_matches('/');
+    if base_url.is_empty() {
+        return Err(
+            "API base URL is missing. Set it (example: https://api.openai.com/v1).".to_string(),
+        );
+    }
+
+    let url = format!("{base_url}/models");
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(API_TEST_TIMEOUT_SECS))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {e}"))?;
+
+    let response = client
+        .get(&url)
+        .bearer_auth(api_key)
+        .send()
+        .await
+        .map_err(map_test_connection_error)?;
+
+    let status = response.status();
+    if status.is_success() {
+        return Ok("API connection successful.".to_string());
+    }
+
+    let body = response
+        .text()
+        .await
+        .unwrap_or_else(|_| "<no response body>".to_string());
+
+    match status.as_u16() {
+        401 => Err(
+            "Connection failed (401 Unauthorized). Your API key looks invalid. Double-check it and save again."
+                .to_string(),
+        ),
+        404 => Err(
+            "Connection failed (404 Not Found). API base URL is likely incorrect. Check it includes the right version path (for OpenAI: https://api.openai.com/v1)."
+                .to_string(),
+        ),
+        _ => Err(format!(
+            "Connection failed ({status}). API response: {}",
+            summarize_http_body(&body)
+        )),
+    }
+}
+
 fn settings_path(app: &AppHandle) -> Result<PathBuf, AppError> {
     let dir = app
         .path()
@@ -208,6 +268,32 @@ fn persist_settings(app: &AppHandle, settings: &Settings) -> Result<(), AppError
     let data = serde_json::to_string_pretty(settings)?;
     fs::write(path, data)?;
     Ok(())
+}
+
+fn map_test_connection_error(error: reqwest::Error) -> String {
+    if error.is_timeout() {
+        return format!(
+            "Connection timed out after {API_TEST_TIMEOUT_SECS}s. Check your network, firewall/VPN settings, and API base URL."
+        );
+    }
+    if error.is_connect() || error.is_request() {
+        return "Could not reach the API host. Verify your internet connection and API base URL."
+            .to_string();
+    }
+    format!("Connection test failed: {error}")
+}
+
+fn summarize_http_body(body: &str) -> String {
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        return "<empty body>".to_string();
+    }
+    const MAX_CHARS: usize = 240;
+    if trimmed.chars().count() <= MAX_CHARS {
+        return trimmed.to_string();
+    }
+    let snippet: String = trimmed.chars().take(MAX_CHARS).collect();
+    format!("{snippet}...")
 }
 
 fn set_status(
@@ -742,7 +828,8 @@ fn main() {
             get_settings,
             save_settings,
             get_runtime_status,
-            toggle_recording
+            toggle_recording,
+            test_api_connection
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
