@@ -52,7 +52,8 @@ This MVP implements exactly that flow on macOS with Tauri and minimal UI.
 - WAV recording from default input device
 - transcription via `/v1/audio/transcriptions`
 - LLM formatting pass via `/v1/chat/completions`
-- formatter prompt is automatically augmented with the current frontmost macOS app name (when available) to adapt style for the target app
+- formatter prompt is context-aware: it includes frontmost app style hints (Terminal/iTerm shell style, Slack/Discord/Telegram chat tone, Gmail/Outlook professional email tone, otherwise neutral)
+- formatter prompt can include optional clipboard reference context (truncated to 500 chars) to reduce manual edits
 - optional fast mode to skip LLM formatting and paste raw transcript
 - paste into focused app using clipboard + `Cmd+V` fallback path
 - paste is non-destructive for text clipboard contents (restored shortly after simulated `Cmd+V`)
@@ -112,11 +113,12 @@ Open the app window and configure:
 - `Run LLM formatting pass` (on by default; disable for lower latency/cost)
 - `Play subtle sound cues` (on by default; start/success/error earcons on macOS)
 - `Global Hotkey` (default `Cmd+Shift+Space`)
-- `Prompt Template` (base formatting instruction; app context is appended automatically on macOS when detected)
+- `Prompt Template` (base formatting instruction; runtime context hints are appended automatically)
 
 ## Security Notes
 
 - API keys are user-provided and saved locally in app config.
+- Optional clipboard reference context is used transiently for formatting only and is not stored by the app.
 - No secrets are hardcoded.
 - `.env.example` is provided only as a template.
 

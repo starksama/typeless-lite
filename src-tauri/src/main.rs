@@ -25,6 +25,7 @@ const TRAY_ID: &str = "main-tray";
 const PRE_PASTE_DELAY_MS: u64 = 60;
 const PASTE_RETRY_BACKOFF_MS: u64 = 45;
 const CLIPBOARD_RESTORE_DELAY_MS: u64 = 300;
+const FORMAT_CONTEXT_CLIPBOARD_MAX_CHARS: usize = 500;
 const MIN_RECORDING_MS: u128 = 400;
 const API_TEST_TIMEOUT_SECS: u64 = 6;
 const API_CLIENT_TIMEOUT_SECS: u64 = 30;
@@ -739,12 +740,18 @@ async fn process_audio_pipeline(
         } else {
             None
         };
+        let clipboard_reference = if settings.format_enabled {
+            capture_clipboard_reference_context()
+        } else {
+            None
+        };
         let output_text = if settings.format_enabled {
             format_transcript(
                 &state.http_client,
                 &settings,
                 &transcription,
                 active_app_name.as_deref(),
+                clipboard_reference.as_deref(),
             )
             .await?
         } else {
@@ -823,9 +830,14 @@ async fn format_transcript(
     settings: &Settings,
     transcript: &str,
     active_app_name: Option<&str>,
+    clipboard_reference: Option<&str>,
 ) -> Result<String, AppError> {
     let url = format!("{}/chat/completions", settings.api_base_url);
-    let system_prompt = build_formatter_system_prompt(&settings.prompt_template, active_app_name);
+    let system_prompt = build_formatter_system_prompt(
+        &settings.prompt_template,
+        active_app_name,
+        clipboard_reference,
+    );
     let request_body = serde_json::json!({
       "model": settings.format_model,
       "temperature": 0,
@@ -863,17 +875,67 @@ async fn format_transcript(
     Ok(content)
 }
 
-fn build_formatter_system_prompt(base_prompt: &str, active_app_name: Option<&str>) -> String {
-    if let Some(app_name) = active_app_name
+fn build_formatter_system_prompt(
+    base_prompt: &str,
+    active_app_name: Option<&str>,
+    clipboard_reference: Option<&str>,
+) -> String {
+    let mut prompt = base_prompt.to_string();
+
+    let app_name = active_app_name
         .map(str::trim)
-        .filter(|name| !name.is_empty())
+        .filter(|name| !name.is_empty());
+
+    let style_hint = if let Some(name) = app_name {
+        let lower_name = name.to_ascii_lowercase();
+        if lower_name.contains("terminal") || lower_name.contains("iterm") {
+            "Use raw shell/CLI style with minimal prose and no extra decoration."
+        } else if lower_name.contains("slack")
+            || lower_name.contains("discord")
+            || lower_name.contains("telegram")
+        {
+            "Use concise chat tone with short lines and direct wording."
+        } else if lower_name.contains("gmail") || lower_name.contains("outlook") {
+            "Use professional email tone with clear and polished phrasing."
+        } else {
+            "Use a neutral tone suitable for general text input."
+        }
+    } else {
+        "Use a neutral tone suitable for general text input."
+    };
+
+    if let Some(name) = app_name {
+        prompt.push_str(&format!("\n\nCurrent target app context: {name}. {style_hint}"));
+    } else {
+        prompt.push_str(&format!("\n\nTarget app context unavailable. {style_hint}"));
+    }
+    prompt.push_str(" Return only final text.");
+
+    if let Some(reference) = clipboard_reference
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
     {
-        return format!(
-            "{base_prompt}\n\nCurrent target app context: {app_name}. Adjust formatting style to feel natural for this app while preserving intent. Return only final text."
-        );
+        prompt.push_str("\n\nOptional clipboard reference context (style only; do not copy verbatim unless requested):\n");
+        prompt.push_str(reference);
     }
 
-    base_prompt.to_string()
+    prompt
+}
+
+fn capture_clipboard_reference_context() -> Option<String> {
+    let mut clipboard = arboard::Clipboard::new().ok()?;
+    let text = clipboard.get_text().ok()?;
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let mut clipped = String::new();
+    for ch in trimmed.chars().take(FORMAT_CONTEXT_CLIPBOARD_MAX_CHARS) {
+        clipped.push(ch);
+    }
+
+    Some(clipped)
 }
 
 #[cfg(target_os = "macos")]
