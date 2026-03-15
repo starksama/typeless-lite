@@ -38,10 +38,16 @@ struct Settings {
     format_model: String,
     #[serde(default = "default_format_enabled")]
     format_enabled: bool,
+    #[serde(default = "default_play_sound_cues")]
+    play_sound_cues: bool,
     api_base_url: String,
 }
 
 fn default_format_enabled() -> bool {
+    true
+}
+
+fn default_play_sound_cues() -> bool {
     true
 }
 
@@ -54,10 +60,45 @@ impl Default for Settings {
             whisper_model: "whisper-1".to_string(),
             format_model: "gpt-4o-mini".to_string(),
             format_enabled: true,
+            play_sound_cues: true,
             api_base_url: "https://api.openai.com/v1".to_string(),
         }
     }
 }
+
+#[derive(Clone, Copy)]
+enum Earcon {
+    Start,
+    Success,
+    Error,
+}
+
+fn play_earcon_if_enabled(state: &State<'_, AppState>, earcon: Earcon) {
+    let enabled = state
+        .settings
+        .lock()
+        .map(|settings| settings.play_sound_cues)
+        .unwrap_or(false);
+    if enabled {
+        play_earcon(earcon);
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn play_earcon(earcon: Earcon) {
+    let sound_name = match earcon {
+        Earcon::Start => "Hero",
+        Earcon::Success => "Glass",
+        Earcon::Error => "Basso",
+    };
+    let sound_path = format!("/System/Library/Sounds/{sound_name}.aiff");
+    thread::spawn(move || {
+        let _ = Command::new("afplay").arg(sound_path).status();
+    });
+}
+
+#[cfg(not(target_os = "macos"))]
+fn play_earcon(_earcon: Earcon) {}
 
 #[derive(Debug, Serialize, Clone)]
 struct RuntimeStatus {
@@ -501,6 +542,7 @@ fn toggle_recording_inner(app: &AppHandle, state: &State<AppState>) -> Result<()
                 Some(false),
                 "Recording... release hotkey to stop (or toggle manually).".to_string(),
             );
+            play_earcon_if_enabled(state, Earcon::Start);
             return Ok(());
         }
     };
@@ -516,6 +558,7 @@ fn toggle_recording_inner(app: &AppHandle, state: &State<AppState>) -> Result<()
                 Some(false),
                 "Recording too short — hold hotkey and speak longer.".to_string(),
             );
+            play_earcon_if_enabled(state, Earcon::Error);
             return Ok(());
         }
 
@@ -538,6 +581,7 @@ fn toggle_recording_inner(app: &AppHandle, state: &State<AppState>) -> Result<()
                     Some(false),
                     format!("Failed: {err}"),
                 );
+                play_earcon_if_enabled(&app_state, Earcon::Error);
             }
         });
     }
@@ -730,6 +774,7 @@ async fn process_audio_pipeline(
         Some(false),
         "Inserted text into focused app.".to_string(),
     );
+    play_earcon_if_enabled(state, Earcon::Success);
 
     Ok(())
 }
@@ -819,7 +864,10 @@ async fn format_transcript(
 }
 
 fn build_formatter_system_prompt(base_prompt: &str, active_app_name: Option<&str>) -> String {
-    if let Some(app_name) = active_app_name.map(str::trim).filter(|name| !name.is_empty()) {
+    if let Some(app_name) = active_app_name
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    {
         return format!(
             "{base_prompt}\n\nCurrent target app context: {app_name}. Adjust formatting style to feel natural for this app while preserving intent. Return only final text."
         );

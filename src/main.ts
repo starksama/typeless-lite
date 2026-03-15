@@ -9,6 +9,7 @@ type Settings = {
   whisper_model: string;
   format_model: string;
   format_enabled: boolean;
+  play_sound_cues: boolean;
   api_base_url: string;
 };
 
@@ -39,6 +40,7 @@ const hotkeyInput = document.querySelector<HTMLInputElement>('#hotkey')!;
 const whisperModelInput = document.querySelector<HTMLInputElement>('#whisperModel')!;
 const formatModelInput = document.querySelector<HTMLInputElement>('#formatModel')!;
 const formatEnabledInput = document.querySelector<HTMLInputElement>('#formatEnabled')!;
+const playSoundCuesInput = document.querySelector<HTMLInputElement>('#playSoundCues')!;
 const apiBaseUrlInput = document.querySelector<HTMLInputElement>('#apiBaseUrl')!;
 
 const defaultPrompt =
@@ -69,6 +71,7 @@ async function loadInitial(): Promise<void> {
   whisperModelInput.value = settings.whisper_model;
   formatModelInput.value = settings.format_model;
   formatEnabledInput.checked = settings.format_enabled;
+  playSoundCuesInput.checked = settings.play_sound_cues;
   apiBaseUrlInput.value = settings.api_base_url;
 
   const status = await invoke<RuntimeStatus>('get_runtime_status');
@@ -84,6 +87,7 @@ form.addEventListener('submit', async (event) => {
     whisper_model: whisperModelInput.value.trim() || 'whisper-1',
     format_model: formatModelInput.value.trim() || 'gpt-4o-mini',
     format_enabled: formatEnabledInput.checked,
+    play_sound_cues: playSoundCuesInput.checked,
     api_base_url: apiBaseUrlInput.value.trim().replace(/\/$/, '') || 'https://api.openai.com/v1'
   };
 

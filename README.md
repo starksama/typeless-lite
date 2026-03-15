@@ -110,6 +110,7 @@ Open the app window and configure:
 - `Whisper Model` (default `whisper-1`)
 - `Formatter Model` (default `gpt-4o-mini`)
 - `Run LLM formatting pass` (on by default; disable for lower latency/cost)
+- `Play subtle sound cues` (on by default; start/success/error earcons on macOS)
 - `Global Hotkey` (default `Cmd+Shift+Space`)
 - `Prompt Template` (base formatting instruction; app context is appended automatically on macOS when detected)
 
