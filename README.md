@@ -1,0 +1,120 @@
+# Typeless Lite (Tauri MVP)
+
+A tiny mac desktop app inspired by Typeless: press a global hotkey, speak, transcribe with Whisper, run an LLM formatting pass, then paste into the currently focused app.
+
+## What Typeless Does (Research Summary)
+
+As of March 15, 2026, a Typeless-style workflow is:
+- capture speech with a global shortcut,
+- convert speech to text,
+- clean/format the text with an LLM,
+- insert into the active input quickly.
+
+This MVP implements exactly that flow on macOS with Tauri and minimal UI.
+
+## Brief Research Notes (Official/Reliable Sources)
+
+1. Tauri global shortcuts + tray + mac build/distribution
+- Tauri global-shortcut plugin supports macOS and Rust handlers; permissions must be explicitly enabled in capability files.
+  - https://v2.tauri.app/plugin/global-shortcut/
+- Tauri tray support in v2 uses the `tray-icon` feature and `TrayIconBuilder`.
+  - https://v2.tauri.app/learn/system-tray/
+- Tauri mac bundling uses `tauri build` on macOS and produces `.app`/`.dmg`; signing and notarization are documented separately.
+  - https://v2.tauri.app/distribute/macos-application-bundle/
+  - https://tauri.app/distribute/sign/macos/
+
+2. macOS accessibility permissions for global text insertion
+- Apple documents Accessibility permission as required when an app controls the Mac (synthetic keystrokes / UI control).
+  - https://support.apple.com/en-euro/guide/mac-help/mh43185/mac
+- Apple documents microphone permission controls in Privacy & Security.
+  - https://support.apple.com/en-afri/guide/mac-help/mchla1b1e1fe/mac
+
+3. OpenAI Whisper transcription API usage
+- OpenAI speech-to-text guide: `transcriptions` endpoint supports `whisper-1` and newer transcribe models; common file formats include `wav`; file size limits apply.
+  - https://platform.openai.com/docs/guides/speech-to-text
+- Whisper model and endpoint compatibility:
+  - https://platform.openai.com/docs/models/whisper-1
+- Chat Completions endpoint used for formatting step:
+  - https://platform.openai.com/docs/api-reference/chat/create-chat-completion
+
+4. Lightweight Android path without Android Studio
+- Android official docs support SDK setup via command-line tools + `sdkmanager` (no Android Studio required).
+  - https://developer.android.com/tools
+  - https://developer.android.com/tools/sdkmanager
+- Tauri CLI supports `android init/dev/build/run` from CLI.
+  - https://v2.tauri.app/reference/cli/
+- Recommendation details are in `ANDROID_LIGHTWEIGHT.md`.
+
+## MVP Scope Implemented
+
+- mac desktop first (Tauri v2 scaffold)
+- global hotkey toggle for mic start/stop
+- WAV recording from default input device
+- transcription via `/v1/audio/transcriptions`
+- LLM formatting pass via `/v1/chat/completions`
+- paste into focused app using clipboard + `Cmd+V` fallback path
+- paste is non-destructive for text clipboard contents (restored shortly after simulated `Cmd+V`)
+- tray menu for open/toggle/quit
+- minimal settings UI for API key, prompt template, hotkey, models, base URL
+- settings persisted to app config dir JSON
+- status events pushed to UI for user feedback
+
+## Project Layout
+
+- `src/`: minimal settings frontend (Vite + TypeScript)
+- `src-tauri/src/main.rs`: hotkey, audio capture, API pipeline, paste logic, tray
+- `src-tauri/capabilities/default.json`: global-shortcut permissions
+- `.env.example`: environment template (no secrets committed)
+- `ANDROID_LIGHTWEIGHT.md`: Android path comparison and recommendation
+
+## Setup
+
+Prereqs:
+- Node.js 20+
+- Rust 1.77+
+- macOS
+
+Install deps:
+```bash
+yarn install
+```
+
+Run in dev:
+```bash
+yarn tauri:dev
+```
+
+Build bundle:
+```bash
+yarn tauri:build
+```
+
+## macOS Permissions (Required)
+
+1. Microphone:
+- System Settings -> Privacy & Security -> Microphone -> allow Typeless Lite.
+
+2. Accessibility (for keystroke paste automation):
+- System Settings -> Privacy & Security -> Accessibility -> allow Typeless Lite.
+
+If paste fails but transcript/formatting succeed, Accessibility permission is usually missing.
+
+## Settings
+
+Open the app window and configure:
+- `API Key` (required)
+- `API Base URL` (default `https://api.openai.com/v1`; supports compatible providers)
+- `Whisper Model` (default `whisper-1`)
+- `Formatter Model` (default `gpt-4o-mini`)
+- `Global Hotkey` (default `Cmd+Shift+Space`)
+- `Prompt Template` (formatting instruction)
+
+## Security Notes
+
+- API keys are user-provided and saved locally in app config.
+- No secrets are hardcoded.
+- `.env.example` is provided only as a template.
+
+## Known Gaps in This Environment
+
+The current execution environment could not access package registries (DNS/network restricted), so dependency installation and full compile/run were blocked here. See final status summary for exact commands and failures.

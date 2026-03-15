@@ -1,0 +1,658 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+use std::{
+    fs,
+    io::BufWriter,
+    path::PathBuf,
+    process::Command,
+    thread,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
+
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use reqwest::multipart::{Form, Part};
+use serde::{Deserialize, Serialize};
+use tauri::{
+    menu::{Menu, MenuItem},
+    tray::TrayIconBuilder,
+    AppHandle, Manager, State,
+};
+use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
+
+const APP_STATUS_EVENT: &str = "runtime-status";
+const CLIPBOARD_RESTORE_DELAY_MS: u64 = 150;
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct Settings {
+    api_key: String,
+    prompt_template: String,
+    hotkey: String,
+    whisper_model: String,
+    format_model: String,
+    api_base_url: String,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            api_key: String::new(),
+            prompt_template: "You are a concise writing assistant. Clean up the transcript for grammar and punctuation while preserving intent. Return only final text.".to_string(),
+            hotkey: "Cmd+Shift+Space".to_string(),
+            whisper_model: "whisper-1".to_string(),
+            format_model: "gpt-4o-mini".to_string(),
+            api_base_url: "https://api.openai.com/v1".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct RuntimeStatus {
+    is_recording: bool,
+    is_processing: bool,
+    last_message: String,
+}
+
+struct AppState {
+    settings: Mutex<Settings>,
+    runtime_status: Mutex<RuntimeStatus>,
+    recorder: Mutex<Option<RecorderSession>>,
+    current_shortcut: Mutex<Option<Shortcut>>,
+}
+
+struct RecorderSession {
+    stream: cpal::Stream,
+    writer: Arc<Mutex<Option<hound::WavWriter<BufWriter<std::fs::File>>>>>,
+    path: PathBuf,
+}
+
+#[derive(thiserror::Error, Debug)]
+enum AppError {
+    #[error("{0}")]
+    Message(String),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    Reqwest(#[from] reqwest::Error),
+}
+
+impl RecorderSession {
+    fn stop(self) -> Result<PathBuf, AppError> {
+        drop(self.stream);
+        let mut writer_lock = self
+            .writer
+            .lock()
+            .map_err(|_| AppError::Message("Failed to lock writer".to_string()))?;
+        if let Some(writer) = writer_lock.take() {
+            writer
+                .finalize()
+                .map_err(|e| AppError::Message(format!("Failed to finalize WAV: {e}")))?;
+        }
+        Ok(self.path)
+    }
+}
+
+#[derive(Deserialize)]
+struct TranscriptionResponse {
+    text: String,
+}
+
+#[derive(Deserialize)]
+struct ChatCompletionResponse {
+    choices: Vec<Choice>,
+}
+
+#[derive(Deserialize)]
+struct Choice {
+    message: Message,
+}
+
+#[derive(Deserialize)]
+struct Message {
+    content: String,
+}
+
+#[tauri::command]
+fn get_settings(state: State<AppState>) -> Settings {
+    state.settings.lock().map(|s| s.clone()).unwrap_or_default()
+}
+
+#[tauri::command]
+fn get_runtime_status(state: State<AppState>) -> RuntimeStatus {
+    state
+        .runtime_status
+        .lock()
+        .map(|s| s.clone())
+        .unwrap_or(RuntimeStatus {
+            is_recording: false,
+            is_processing: false,
+            last_message: "State unavailable".to_string(),
+        })
+}
+
+#[tauri::command]
+fn save_settings(app: AppHandle, state: State<AppState>, settings: Settings) -> Result<(), String> {
+    if settings.hotkey.trim().is_empty() {
+        return Err("Hotkey cannot be empty".to_string());
+    }
+
+    {
+        let mut lock = state
+            .settings
+            .lock()
+            .map_err(|_| "Failed to lock settings".to_string())?;
+        *lock = settings.clone();
+    }
+
+    persist_settings(&app, &settings).map_err(|e| e.to_string())?;
+    register_shortcut(&app, &state, &settings.hotkey)?;
+    set_status(
+        &app,
+        &state,
+        None,
+        None,
+        format!("Settings saved. Hotkey: {}", settings.hotkey),
+    );
+    Ok(())
+}
+
+#[tauri::command]
+fn toggle_recording(app: AppHandle, state: State<AppState>) -> Result<(), String> {
+    toggle_recording_inner(&app, &state)
+}
+
+fn settings_path(app: &AppHandle) -> Result<PathBuf, AppError> {
+    let dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|e| AppError::Message(format!("Failed resolving config dir: {e}")))?;
+    fs::create_dir_all(&dir)?;
+    Ok(dir.join("settings.json"))
+}
+
+fn load_settings(app: &AppHandle) -> Settings {
+    let Ok(path) = settings_path(app) else {
+        return Settings::default();
+    };
+    if !path.exists() {
+        return Settings::default();
+    }
+    let Ok(text) = fs::read_to_string(path) else {
+        return Settings::default();
+    };
+    serde_json::from_str(&text).unwrap_or_default()
+}
+
+fn persist_settings(app: &AppHandle, settings: &Settings) -> Result<(), AppError> {
+    let path = settings_path(app)?;
+    let data = serde_json::to_string_pretty(settings)?;
+    fs::write(path, data)?;
+    Ok(())
+}
+
+fn set_status(
+    app: &AppHandle,
+    state: &State<AppState>,
+    is_recording: Option<bool>,
+    is_processing: Option<bool>,
+    message: String,
+) {
+    if let Ok(mut status) = state.runtime_status.lock() {
+        if let Some(v) = is_recording {
+            status.is_recording = v;
+        }
+        if let Some(v) = is_processing {
+            status.is_processing = v;
+        }
+        status.last_message = message;
+        let _ = app.emit(APP_STATUS_EVENT, status.clone());
+    }
+}
+
+fn register_shortcut(app: &AppHandle, state: &State<AppState>, hotkey: &str) -> Result<(), String> {
+    let shortcut = hotkey
+        .parse::<Shortcut>()
+        .map_err(|e| format!("Invalid hotkey '{hotkey}': {e}"))?;
+
+    if let Ok(mut lock) = state.current_shortcut.lock() {
+        if let Some(existing) = lock.take() {
+            let _ = app.global_shortcut().unregister(existing);
+        }
+        app.global_shortcut()
+            .register(shortcut)
+            .map_err(|e| format!("Failed to register hotkey: {e}"))?;
+        *lock = Some(shortcut);
+        Ok(())
+    } else {
+        Err("Failed to lock shortcut state".to_string())
+    }
+}
+
+fn toggle_recording_inner(app: &AppHandle, state: &State<AppState>) -> Result<(), String> {
+    let maybe_session = {
+        let mut lock = state
+            .recorder
+            .lock()
+            .map_err(|_| "Recorder lock poisoned".to_string())?;
+        if lock.is_some() {
+            lock.take()
+        } else {
+            let session = start_recording().map_err(|e| e.to_string())?;
+            *lock = Some(session);
+            set_status(
+                app,
+                state,
+                Some(true),
+                Some(false),
+                "Recording... press hotkey again to stop".to_string(),
+            );
+            return Ok(());
+        }
+    };
+
+    if let Some(session) = maybe_session {
+        let wav_path = session.stop().map_err(|e| e.to_string())?;
+        set_status(
+            app,
+            state,
+            Some(false),
+            Some(true),
+            "Transcribing and formatting...".to_string(),
+        );
+
+        let app_handle = app.clone();
+        tauri::async_runtime::spawn(async move {
+            let app_state: State<AppState> = app_handle.state();
+            if let Err(err) = process_audio_pipeline(&app_handle, &app_state, wav_path).await {
+                set_status(
+                    &app_handle,
+                    &app_state,
+                    Some(false),
+                    Some(false),
+                    format!("Failed: {err}"),
+                );
+            }
+        });
+    }
+
+    Ok(())
+}
+
+fn start_recording() -> Result<RecorderSession, AppError> {
+    let host = cpal::default_host();
+    let device = host
+        .default_input_device()
+        .ok_or_else(|| AppError::Message("No default input device found".to_string()))?;
+
+    let supported_config = device
+        .default_input_config()
+        .map_err(|e| AppError::Message(format!("No default input config: {e}")))?;
+
+    let config: cpal::StreamConfig = supported_config.clone().into();
+
+    let epoch = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| AppError::Message(format!("Clock error: {e}")))?
+        .as_millis();
+    let path = std::env::temp_dir().join(format!("typeless-lite-{epoch}.wav"));
+
+    let spec = hound::WavSpec {
+        channels: config.channels,
+        sample_rate: config.sample_rate.0,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+
+    let writer = hound::WavWriter::create(&path, spec)
+        .map_err(|e| AppError::Message(format!("Failed creating WAV file: {e}")))?;
+    let writer = Arc::new(Mutex::new(Some(writer)));
+
+    let err_fn = |err| {
+        eprintln!("Audio stream error: {err}");
+    };
+
+    let writer_clone = writer.clone();
+    let stream = match supported_config.sample_format() {
+        cpal::SampleFormat::F32 => device
+            .build_input_stream(
+                &config,
+                move |data: &[f32], _| write_samples_f32(data, &writer_clone),
+                err_fn,
+                None,
+            )
+            .map_err(|e| AppError::Message(format!("Failed building f32 stream: {e}")))?,
+        cpal::SampleFormat::I16 => {
+            let writer_clone = writer.clone();
+            device
+                .build_input_stream(
+                    &config,
+                    move |data: &[i16], _| write_samples_i16(data, &writer_clone),
+                    err_fn,
+                    None,
+                )
+                .map_err(|e| AppError::Message(format!("Failed building i16 stream: {e}")))?
+        }
+        cpal::SampleFormat::U16 => {
+            let writer_clone = writer.clone();
+            device
+                .build_input_stream(
+                    &config,
+                    move |data: &[u16], _| write_samples_u16(data, &writer_clone),
+                    err_fn,
+                    None,
+                )
+                .map_err(|e| AppError::Message(format!("Failed building u16 stream: {e}")))?
+        }
+        other => {
+            return Err(AppError::Message(format!(
+                "Unsupported sample format: {other:?}"
+            )))
+        }
+    };
+
+    stream
+        .play()
+        .map_err(|e| AppError::Message(format!("Failed starting input stream: {e}")))?;
+
+    Ok(RecorderSession {
+        stream,
+        writer,
+        path,
+    })
+}
+
+fn write_samples_f32(
+    input: &[f32],
+    writer: &Arc<Mutex<Option<hound::WavWriter<BufWriter<std::fs::File>>>>>,
+) {
+    if let Ok(mut lock) = writer.lock() {
+        if let Some(w) = lock.as_mut() {
+            for sample in input {
+                let clamped = sample.clamp(-1.0, 1.0);
+                let s = (clamped * i16::MAX as f32) as i16;
+                let _ = w.write_sample(s);
+            }
+        }
+    }
+}
+
+fn write_samples_i16(
+    input: &[i16],
+    writer: &Arc<Mutex<Option<hound::WavWriter<BufWriter<std::fs::File>>>>>,
+) {
+    if let Ok(mut lock) = writer.lock() {
+        if let Some(w) = lock.as_mut() {
+            for sample in input {
+                let _ = w.write_sample(*sample);
+            }
+        }
+    }
+}
+
+fn write_samples_u16(
+    input: &[u16],
+    writer: &Arc<Mutex<Option<hound::WavWriter<BufWriter<std::fs::File>>>>>,
+) {
+    if let Ok(mut lock) = writer.lock() {
+        if let Some(w) = lock.as_mut() {
+            for sample in input {
+                let shifted = (*sample as i32 - 32768) as i16;
+                let _ = w.write_sample(shifted);
+            }
+        }
+    }
+}
+
+async fn process_audio_pipeline(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    wav_path: PathBuf,
+) -> Result<(), AppError> {
+    let settings = state
+        .settings
+        .lock()
+        .map_err(|_| AppError::Message("Failed to lock settings".to_string()))?
+        .clone();
+
+    if settings.api_key.is_empty() {
+        return Err(AppError::Message(
+            "Missing API key. Save it in settings first.".to_string(),
+        ));
+    }
+
+    let transcription = transcribe_audio(&settings, &wav_path).await?;
+    let formatted = format_transcript(&settings, &transcription).await?;
+    paste_text(&formatted)?;
+
+    let _ = fs::remove_file(&wav_path);
+
+    set_status(
+        app,
+        state,
+        Some(false),
+        Some(false),
+        "Inserted formatted text into focused app.".to_string(),
+    );
+
+    Ok(())
+}
+
+async fn transcribe_audio(settings: &Settings, wav_path: &PathBuf) -> Result<String, AppError> {
+    let bytes = fs::read(wav_path)?;
+    let url = format!("{}/audio/transcriptions", settings.api_base_url);
+    let form = Form::new()
+        .part(
+            "file",
+            Part::bytes(bytes)
+                .file_name("recording.wav")
+                .mime_str("audio/wav")
+                .map_err(|e| AppError::Message(format!("MIME error: {e}")))?,
+        )
+        .text("model", settings.whisper_model.clone());
+
+    let client = reqwest::Client::new();
+    let response = client
+        .post(url)
+        .bearer_auth(&settings.api_key)
+        .multipart(form)
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "<no body>".to_string());
+        return Err(AppError::Message(format!(
+            "Transcription failed ({status}): {body}"
+        )));
+    }
+
+    let parsed: TranscriptionResponse = response.json().await?;
+    Ok(parsed.text)
+}
+
+async fn format_transcript(settings: &Settings, transcript: &str) -> Result<String, AppError> {
+    let url = format!("{}/chat/completions", settings.api_base_url);
+    let request_body = serde_json::json!({
+      "model": settings.format_model,
+      "temperature": 0,
+      "messages": [
+        {"role":"system","content": settings.prompt_template},
+        {"role":"user","content": transcript}
+      ]
+    });
+
+    let client = reqwest::Client::new();
+    let response = client
+        .post(url)
+        .bearer_auth(&settings.api_key)
+        .json(&request_body)
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "<no body>".to_string());
+        return Err(AppError::Message(format!(
+            "Formatting failed ({status}): {body}"
+        )));
+    }
+
+    let parsed: ChatCompletionResponse = response.json().await?;
+    let content = parsed
+        .choices
+        .first()
+        .map(|c| c.message.content.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| AppError::Message("No formatter output text received".to_string()))?;
+    Ok(content)
+}
+
+fn paste_text(text: &str) -> Result<(), AppError> {
+    let mut clipboard =
+        arboard::Clipboard::new().map_err(|e| AppError::Message(format!("Clipboard: {e}")))?;
+    let original_text = match clipboard.get_text() {
+        Ok(value) => Some(value),
+        Err(e) => {
+            eprintln!("Clipboard read failed before paste; skipping restore: {e}");
+            None
+        }
+    };
+
+    clipboard
+        .set_text(text.to_string())
+        .map_err(|e| AppError::Message(format!("Clipboard write failed: {e}")))?;
+
+    let output = Command::new("osascript")
+        .arg("-e")
+        .arg("tell application \"System Events\" to keystroke \"v\" using command down")
+        .output()
+        .map_err(|e| AppError::Message(format!("Failed to run osascript: {e}")))?;
+
+    restore_clipboard_after_delay(original_text);
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        return Err(AppError::Message(format!(
+            "Paste keystroke failed. Check Accessibility permissions. {stderr}"
+        )));
+    }
+
+    Ok(())
+}
+
+fn restore_clipboard_after_delay(original_text: Option<String>) {
+    let Some(original_text) = original_text else {
+        return;
+    };
+
+    thread::spawn(move || {
+        thread::sleep(Duration::from_millis(CLIPBOARD_RESTORE_DELAY_MS));
+        match arboard::Clipboard::new() {
+            Ok(mut clipboard) => {
+                if let Err(e) = clipboard.set_text(original_text) {
+                    eprintln!("Clipboard restore failed: {e}");
+                }
+            }
+            Err(e) => {
+                eprintln!("Clipboard reopen failed during restore: {e}");
+            }
+        }
+    });
+}
+
+fn default_hotkey() -> Shortcut {
+    Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::Space)
+}
+
+fn main() {
+    tauri::Builder::default()
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, shortcut, event| {
+                    if event.state != ShortcutState::Pressed {
+                        return;
+                    }
+
+                    let state: State<AppState> = app.state();
+                    let active_shortcut = state
+                        .current_shortcut
+                        .lock()
+                        .ok()
+                        .and_then(|s| *s)
+                        .unwrap_or_else(default_hotkey);
+
+                    if shortcut == &active_shortcut {
+                        let _ = toggle_recording_inner(app, &state);
+                    }
+                })
+                .build(),
+        )
+        .setup(|app| {
+            let settings = load_settings(app.handle());
+
+            let state = AppState {
+                settings: Mutex::new(settings.clone()),
+                runtime_status: Mutex::new(RuntimeStatus {
+                    is_recording: false,
+                    is_processing: false,
+                    last_message: "Ready".to_string(),
+                }),
+                recorder: Mutex::new(None),
+                current_shortcut: Mutex::new(None),
+            };
+            app.manage(state);
+
+            let app_state: State<AppState> = app.state();
+            register_shortcut(app.handle(), &app_state, &settings.hotkey)
+                .map_err(|e| Box::<dyn std::error::Error>::from(e.to_string()))?;
+
+            let open_item = MenuItem::with_id(app, "open", "Open Settings", true, None::<&str>)?;
+            let toggle_item =
+                MenuItem::with_id(app, "toggle", "Start / Stop Recording", true, None::<&str>)?;
+            let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&open_item, &toggle_item, &quit_item])?;
+
+            let _tray = TrayIconBuilder::new()
+                .menu(&menu)
+                .tooltip("Typeless Lite")
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "open" => {
+                        if let Some(win) = app.get_webview_window("main") {
+                            let _ = win.show();
+                            let _ = win.set_focus();
+                        }
+                    }
+                    "toggle" => {
+                        let state: State<AppState> = app.state();
+                        let _ = toggle_recording_inner(app, &state);
+                    }
+                    "quit" => {
+                        app.exit(0);
+                    }
+                    _ => {}
+                })
+                .build(app)?;
+
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            get_settings,
+            save_settings,
+            get_runtime_status,
+            toggle_recording
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}
