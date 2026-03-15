@@ -27,6 +27,7 @@ const PASTE_RETRY_BACKOFF_MS: u64 = 45;
 const CLIPBOARD_RESTORE_DELAY_MS: u64 = 300;
 const MIN_RECORDING_MS: u128 = 400;
 const API_TEST_TIMEOUT_SECS: u64 = 6;
+const API_CLIENT_TIMEOUT_SECS: u64 = 30;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct Settings {
@@ -79,6 +80,7 @@ struct AppState {
     runtime_status: Mutex<RuntimeStatus>,
     recorder: Mutex<Option<RecorderSession>>,
     current_shortcut: Mutex<Option<Shortcut>>,
+    http_client: reqwest::Client,
 }
 
 struct RecorderSession {
@@ -687,9 +689,9 @@ async fn process_audio_pipeline(
             ));
         }
 
-        let transcription = transcribe_audio(&settings, &wav_path).await?;
+        let transcription = transcribe_audio(&state.http_client, &settings, &wav_path).await?;
         let output_text = if settings.format_enabled {
-            format_transcript(&settings, &transcription).await?
+            format_transcript(&state.http_client, &settings, &transcription).await?
         } else {
             transcription
         };
@@ -721,7 +723,11 @@ async fn process_audio_pipeline(
     Ok(())
 }
 
-async fn transcribe_audio(settings: &Settings, wav_path: &PathBuf) -> Result<String, AppError> {
+async fn transcribe_audio(
+    client: &reqwest::Client,
+    settings: &Settings,
+    wav_path: &PathBuf,
+) -> Result<String, AppError> {
     let bytes = fs::read(wav_path)?;
     let url = format!("{}/audio/transcriptions", settings.api_base_url);
     let form = Form::new()
@@ -734,7 +740,6 @@ async fn transcribe_audio(settings: &Settings, wav_path: &PathBuf) -> Result<Str
         )
         .text("model", settings.whisper_model.clone());
 
-    let client = reqwest::Client::new();
     let response = client
         .post(url)
         .bearer_auth(&settings.api_key)
@@ -757,7 +762,11 @@ async fn transcribe_audio(settings: &Settings, wav_path: &PathBuf) -> Result<Str
     Ok(parsed.text)
 }
 
-async fn format_transcript(settings: &Settings, transcript: &str) -> Result<String, AppError> {
+async fn format_transcript(
+    client: &reqwest::Client,
+    settings: &Settings,
+    transcript: &str,
+) -> Result<String, AppError> {
     let url = format!("{}/chat/completions", settings.api_base_url);
     let request_body = serde_json::json!({
       "model": settings.format_model,
@@ -768,7 +777,6 @@ async fn format_transcript(settings: &Settings, transcript: &str) -> Result<Stri
       ]
     });
 
-    let client = reqwest::Client::new();
     let response = client
         .post(url)
         .bearer_auth(&settings.api_key)
@@ -898,6 +906,10 @@ fn main() {
         )
         .setup(|app| {
             let settings = load_settings(app.handle());
+            let http_client = reqwest::Client::builder()
+                .timeout(Duration::from_secs(API_CLIENT_TIMEOUT_SECS))
+                .build()
+                .map_err(|e| Box::<dyn std::error::Error>::from(e.to_string()))?;
 
             let state = AppState {
                 settings: Mutex::new(settings.clone()),
@@ -908,6 +920,7 @@ fn main() {
                 }),
                 recorder: Mutex::new(None),
                 current_shortcut: Mutex::new(None),
+                http_client,
             };
             app.manage(state);
 
