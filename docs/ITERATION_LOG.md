@@ -1,5 +1,11 @@
 # Iteration Log
 
+## 2026-03-16T13:09:39Z
+- Area worked: settings diagnostics UX follow-up
+- User value: Adds explicit in-panel feedback for `Copy diagnostics` (copying/success/failure) so users can confirm outcome without leaving Settings.
+- Validation result:
+  - `yarn build` (pass)
+
 ## 2026-03-16T12:38:53Z
 - Area worked: settings diagnostics UX
 - User value: Adds a concise Settings status panel with one-click `Copy diagnostics` to share runtime, accessibility, and API test state in bug reports.
