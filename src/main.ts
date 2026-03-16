@@ -62,6 +62,31 @@ const LANGUAGE_LABELS: Record<TranscriptionLanguage, string> = {
   de: 'German (de)'
 };
 
+const MODIFIER_ALIAS_TO_CANONICAL: Record<string, string> = {
+  cmd: 'Cmd',
+  command: 'Cmd',
+  control: 'Ctrl',
+  ctrl: 'Ctrl',
+  option: 'Alt',
+  opt: 'Alt',
+  alt: 'Alt',
+  shift: 'Shift',
+  super: 'Super',
+  win: 'Super',
+  windows: 'Super',
+  meta: 'Meta',
+  fn: 'Fn',
+  function: 'Fn'
+};
+
+const NON_MODIFIER_ALIAS_TO_CANONICAL: Record<string, string> = {
+  spacebar: 'Space',
+  esc: 'Escape',
+  return: 'Enter'
+};
+
+const KNOWN_MODIFIERS = new Set(Object.values(MODIFIER_ALIAS_TO_CANONICAL));
+
 const statusEl = document.querySelector<HTMLParagraphElement>('#status')!;
 const modeStatusTextEl = document.querySelector<HTMLParagraphElement>('#mode-status-text')!;
 const micLevelValueEl = document.querySelector<HTMLSpanElement>('#mic-level-value')!;
@@ -279,27 +304,64 @@ function normalizeLanguage(language: string): TranscriptionLanguage {
 }
 
 function normalizeHotkeyInput(input: string): string {
-  return input
+  const normalizedParts = input
     .trim()
     .split('+')
     .map((part) => part.trim())
     .filter(Boolean)
-    .join('+');
+    .map((part) => {
+      const compactPart = part.replace(/\s+/g, '');
+      const aliasKey = compactPart.toLowerCase();
+      const normalizedModifier = MODIFIER_ALIAS_TO_CANONICAL[aliasKey];
+      if (normalizedModifier) {
+        return normalizedModifier;
+      }
+      const normalizedNonModifier = NON_MODIFIER_ALIAS_TO_CANONICAL[aliasKey];
+      if (normalizedNonModifier) {
+        return normalizedNonModifier;
+      }
+      if (compactPart.length === 1) {
+        return compactPart.toUpperCase();
+      }
+      return compactPart;
+    });
+
+  const modifierParts = normalizedParts.filter((part) => KNOWN_MODIFIERS.has(part));
+  const nonModifierParts = normalizedParts.filter((part) => !KNOWN_MODIFIERS.has(part));
+  return [...modifierParts, ...nonModifierParts].join('+');
 }
 
 function validateHotkey(hotkey: string): string | null {
-  const normalized = normalizeHotkeyInput(hotkey);
-  if (!normalized) {
+  const trimmed = hotkey.trim();
+  if (!trimmed) {
     return 'Hotkey cannot be empty. Try Cmd+Shift+Space.';
   }
 
-  const parts = normalized.split('+');
-  if (parts.length < 2) {
-    return 'Use at least one modifier plus a key, for example Cmd+Shift+Space.';
+  const rawParts = trimmed.split('+').map((part) => part.trim());
+  if (rawParts.some((part) => !part)) {
+    return 'Hotkey contains an empty key segment. Remove extra + signs.';
   }
 
-  if (parts.some((part) => !part)) {
-    return 'Hotkey contains an empty key segment. Remove extra + signs.';
+  const normalized = normalizeHotkeyInput(trimmed);
+  const parts = normalized.split('+').filter(Boolean);
+  const modifiers = parts.filter((part) => KNOWN_MODIFIERS.has(part));
+  const nonModifiers = parts.filter((part) => !KNOWN_MODIFIERS.has(part));
+
+  if (modifiers.length === 0) {
+    return 'Use at least one modifier (Cmd/Ctrl/Alt/Shift) plus one key.';
+  }
+
+  const duplicateModifier = modifiers.find((modifier, index) => modifiers.indexOf(modifier) !== index);
+  if (duplicateModifier) {
+    return `Duplicate modifier "${duplicateModifier}". Use each modifier once.`;
+  }
+
+  if (nonModifiers.length === 0) {
+    return 'Hotkey needs one non-modifier key (for example Space).';
+  }
+
+  if (nonModifiers.length > 1) {
+    return 'Use exactly one non-modifier key.';
   }
 
   return null;
