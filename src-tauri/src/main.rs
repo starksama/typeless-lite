@@ -34,6 +34,8 @@ const TERMINAL_TYPE_CHUNK_SIZE: usize = 80;
 const MIN_RECORDING_MS: u128 = 400;
 const API_TEST_TIMEOUT_SECS: u64 = 6;
 const API_CLIENT_TIMEOUT_SECS: u64 = 30;
+const API_RETRY_MAX_ATTEMPTS: u32 = 3;
+const API_RETRY_BASE_BACKOFF_MS: u64 = 350;
 const TRANSCRIPT_HISTORY_LIMIT: usize = 500;
 const TRANSCRIPT_HISTORY_EVENT: &str = "transcript-history-updated";
 const DURABLE_DRAFT_EVENT: &str = "durable-draft-updated";
@@ -1051,7 +1053,7 @@ fn toggle_recording_inner(app: &AppHandle, state: &State<AppState>) -> Result<()
                     .lock()
                     .ok()
                     .and_then(|draft| draft.clone())
-                    .map(|_| " Draft saved in Dictation tab for recovery.")
+                    .map(|_| " Draft saved. In Dictation tab, click ‘Copy draft’ to restore.")
                     .unwrap_or("");
                 set_status(
                     &app_handle,
@@ -1374,45 +1376,71 @@ async fn transcribe_audio(
 ) -> Result<String, AppError> {
     let bytes = fs::read(wav_path)?;
     let url = format!("{}/audio/transcriptions", settings.api_base_url);
-    let mut form = Form::new()
-        .part(
-            "file",
-            Part::bytes(bytes)
-                .file_name("recording.wav")
-                .mime_str("audio/wav")
-                .map_err(|e| AppError::Message(format!("MIME error: {e}")))?,
-        )
-        .text("model", settings.whisper_model.clone());
     let transcription_language = normalize_transcription_language(&settings.language);
-    if transcription_language != "auto" {
-        form = form.text("language", transcription_language);
-    }
-    if let Some(prompt) =
-        build_transcription_prompt(settings.custom_vocabulary.as_str(), clipboard_reference)
-    {
-        form = form.text("prompt", prompt);
+    let transcription_prompt =
+        build_transcription_prompt(settings.custom_vocabulary.as_str(), clipboard_reference);
+
+    for attempt in 0..API_RETRY_MAX_ATTEMPTS {
+        let mut form = Form::new()
+            .part(
+                "file",
+                Part::bytes(bytes.clone())
+                    .file_name("recording.wav")
+                    .mime_str("audio/wav")
+                    .map_err(|e| AppError::Message(format!("MIME error: {e}")))?,
+            )
+            .text("model", settings.whisper_model.clone());
+        if transcription_language != "auto" {
+            form = form.text("language", transcription_language.clone());
+        }
+        if let Some(prompt) = &transcription_prompt {
+            form = form.text("prompt", prompt.clone());
+        }
+
+        let response = client
+            .post(&url)
+            .bearer_auth(&settings.api_key)
+            .multipart(form)
+            .send()
+            .await;
+
+        match response {
+            Ok(response) => {
+                if response.status().is_success() {
+                    let parsed: TranscriptionResponse = response.json().await?;
+                    return Ok(parsed.text);
+                }
+
+                let status = response.status();
+                let body = response
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "<no body>".to_string());
+                let should_retry = is_retryable_status(status) && attempt + 1 < API_RETRY_MAX_ATTEMPTS;
+                if should_retry {
+                    tokio::time::sleep(Duration::from_millis(retry_backoff_ms(attempt))).await;
+                    continue;
+                }
+
+                return Err(AppError::Message(format!(
+                    "Transcription failed ({status}): {body}"
+                )));
+            }
+            Err(error) => {
+                let should_retry = (error.is_timeout() || error.is_connect())
+                    && attempt + 1 < API_RETRY_MAX_ATTEMPTS;
+                if should_retry {
+                    tokio::time::sleep(Duration::from_millis(retry_backoff_ms(attempt))).await;
+                    continue;
+                }
+                return Err(AppError::Reqwest(error));
+            }
+        }
     }
 
-    let response = client
-        .post(url)
-        .bearer_auth(&settings.api_key)
-        .multipart(form)
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response
-            .text()
-            .await
-            .unwrap_or_else(|_| "<no body>".to_string());
-        return Err(AppError::Message(format!(
-            "Transcription failed ({status}): {body}"
-        )));
-    }
-
-    let parsed: TranscriptionResponse = response.json().await?;
-    Ok(parsed.text)
+    Err(AppError::Message(
+        "Transcription failed after retries.".to_string(),
+    ))
 }
 
 fn build_transcription_prompt(
@@ -1447,6 +1475,14 @@ fn truncate_chars(text: &str, max_chars: usize) -> String {
     text.chars().take(max_chars).collect()
 }
 
+fn is_retryable_status(status: reqwest::StatusCode) -> bool {
+    status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error()
+}
+
+fn retry_backoff_ms(attempt: u32) -> u64 {
+    API_RETRY_BASE_BACKOFF_MS.saturating_mul(1_u64 << attempt.min(5))
+}
+
 async fn format_transcript(
     client: &reqwest::Client,
     settings: &Settings,
@@ -1469,42 +1505,66 @@ async fn format_transcript(
       ]
     });
 
-    let response = client
-        .post(url)
-        .bearer_auth(&settings.api_key)
-        .json(&request_body)
-        .send()
-        .await?;
+    for attempt in 0..API_RETRY_MAX_ATTEMPTS {
+        let response = client
+            .post(&url)
+            .bearer_auth(&settings.api_key)
+            .json(&request_body)
+            .send()
+            .await;
 
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response
-            .text()
-            .await
-            .unwrap_or_else(|_| "<no body>".to_string());
-        return Err(AppError::Message(format!(
-            "Formatting failed ({status}): {body}"
-        )));
+        match response {
+            Ok(response) => {
+                if !response.status().is_success() {
+                    let status = response.status();
+                    let body = response
+                        .text()
+                        .await
+                        .unwrap_or_else(|_| "<no body>".to_string());
+                    let should_retry =
+                        is_retryable_status(status) && attempt + 1 < API_RETRY_MAX_ATTEMPTS;
+                    if should_retry {
+                        tokio::time::sleep(Duration::from_millis(retry_backoff_ms(attempt))).await;
+                        continue;
+                    }
+                    return Err(AppError::Message(format!(
+                        "Formatting failed ({status}): {body}"
+                    )));
+                }
+
+                let parsed: ChatCompletionResponse = response.json().await?;
+                let content = parsed
+                    .choices
+                    .first()
+                    .map(|c| c.message.content.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .ok_or_else(|| AppError::Message("No formatter output text received".to_string()))?;
+                if formatter_output_passes_safety_check(transcript, &content) {
+                    return Ok(FormatterResult {
+                        text: content,
+                        used_raw_fallback: false,
+                    });
+                }
+                return Ok(FormatterResult {
+                    text: transcript.to_string(),
+                    used_raw_fallback: true,
+                });
+            }
+            Err(error) => {
+                let should_retry = (error.is_timeout() || error.is_connect())
+                    && attempt + 1 < API_RETRY_MAX_ATTEMPTS;
+                if should_retry {
+                    tokio::time::sleep(Duration::from_millis(retry_backoff_ms(attempt))).await;
+                    continue;
+                }
+                return Err(AppError::Reqwest(error));
+            }
+        }
     }
 
-    let parsed: ChatCompletionResponse = response.json().await?;
-    let content = parsed
-        .choices
-        .first()
-        .map(|c| c.message.content.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| AppError::Message("No formatter output text received".to_string()))?;
-    if formatter_output_passes_safety_check(transcript, &content) {
-        Ok(FormatterResult {
-            text: content,
-            used_raw_fallback: false,
-        })
-    } else {
-        Ok(FormatterResult {
-            text: transcript.to_string(),
-            used_raw_fallback: true,
-        })
-    }
+    Err(AppError::Message(
+        "Formatting failed after retries.".to_string(),
+    ))
 }
 
 fn build_formatter_system_prompt(

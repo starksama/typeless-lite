@@ -1,5 +1,15 @@
 # Iteration Log
 
+## 2026-03-16T11:40:20Z
+- Area worked: reliability hardening
+- User value: Retries transient 429/5xx API failures during transcription/formatting and gives explicit draft recovery CTA when failures occur after draft capture.
+- Files changed:
+  - `src-tauri/src/main.rs`
+  - `docs/ITERATION_LOG.md`
+  - `docs/NEXT_ITERATION.md`
+- Validation result:
+  - `yarn build` (pass)
+
 ## 2026-03-16T11:09:27Z
 - Area worked: onboarding UX
 - User value: Prevents incomplete first-run setup by validating API key and API base URL inline, with one-click base URL normalization before continuing.
