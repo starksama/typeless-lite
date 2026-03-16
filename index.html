@@ -7,33 +7,63 @@
     <script type="module" src="/src/main.ts" defer></script>
   </head>
   <body>
-    <main class="app-shell">
-      <header class="workspace-header card">
-        <div>
-          <p class="eyebrow">Typeless Lite</p>
-          <h1>Voice Workspace</h1>
-          <p class="subtle">Capture, refine, and insert text from anywhere with one shortcut.</p>
+    <main id="app-shell" class="app-shell">
+      <aside id="workspace-sidebar" class="sidebar card" aria-label="Workspace navigation">
+        <div class="sidebar-head">
+          <div>
+            <p class="eyebrow">Typeless Lite</p>
+            <p class="sidebar-title">Voice Workspace</p>
+          </div>
+          <button
+            id="sidebar-toggle-btn"
+            type="button"
+            class="ui-button ui-button-secondary icon-button"
+            aria-label="Collapse sidebar"
+            aria-expanded="true"
+          >
+            <span aria-hidden="true">«</span>
+          </button>
         </div>
-        <div class="chips" aria-label="Quick status">
-          <span class="chip">Hotkey: <strong id="active-hotkey-chip">Cmd+Shift+Space</strong></span>
-          <span class="chip">Mode: <strong id="active-mode-chip">Hold to record</strong></span>
-          <span class="chip">Language: <strong id="active-language-chip">Auto</strong></span>
-          <span class="chip">State: <strong id="active-state-chip">Loading</strong></span>
-        </div>
-      </header>
 
-      <section class="tabs-shell card" aria-label="Workspace tabs">
-        <div class="tabs" role="tablist" aria-label="Workspace sections">
-          <button id="tab-home" class="tab-btn is-active" type="button" role="tab" aria-selected="true" aria-controls="tab-home-panel" data-tab-target="home" tabindex="0">Home</button>
-          <button id="tab-dictation" class="tab-btn" type="button" role="tab" aria-selected="false" aria-controls="tab-dictation-panel" data-tab-target="dictation" tabindex="-1">Dictation</button>
-          <button id="tab-history" class="tab-btn" type="button" role="tab" aria-selected="false" aria-controls="tab-history-panel" data-tab-target="history" tabindex="-1">History</button>
-          <button id="tab-settings" class="tab-btn" type="button" role="tab" aria-selected="false" aria-controls="tab-settings-panel" data-tab-target="settings" tabindex="-1">Settings</button>
+        <nav class="sidebar-nav" role="tablist" aria-orientation="vertical" aria-label="Workspace sections">
+          <button id="tab-home" class="sidebar-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="tab-home-panel" data-tab-target="home" tabindex="0">
+            <span class="sidebar-tab-label">Home</span>
+          </button>
+          <button id="tab-dictation" class="sidebar-tab" type="button" role="tab" aria-selected="false" aria-controls="tab-dictation-panel" data-tab-target="dictation" tabindex="-1">
+            <span class="sidebar-tab-label">Dictation</span>
+          </button>
+          <button id="tab-history" class="sidebar-tab" type="button" role="tab" aria-selected="false" aria-controls="tab-history-panel" data-tab-target="history" tabindex="-1">
+            <span class="sidebar-tab-label">History</span>
+          </button>
+          <button id="tab-settings" class="sidebar-tab" type="button" role="tab" aria-selected="false" aria-controls="tab-settings-panel" data-tab-target="settings" tabindex="-1">
+            <span class="sidebar-tab-label">Settings</span>
+          </button>
+        </nav>
+
+        <div class="sidebar-status" aria-label="Quick status">
+          <p><span>Hotkey</span> <strong id="active-hotkey-chip">Cmd+Shift+Space</strong></p>
+          <p><span>Mode</span> <strong id="active-mode-chip">Hold to record</strong></p>
+          <p><span>Language</span> <strong id="active-language-chip">Auto</strong></p>
+          <p><span>State</span> <strong id="active-state-chip">Loading</strong></p>
         </div>
+      </aside>
+
+      <section class="workspace-main">
+        <header class="workspace-header card">
+          <div>
+            <h1>Voice Workspace</h1>
+            <p class="subtle">Capture, refine, and insert text from anywhere with one shortcut.</p>
+          </div>
+          <div class="chips" aria-label="Shortcut hints">
+            <span class="chip">Shortcut: <strong id="shortcut-primary-hint">Cmd+Shift+Space</strong></span>
+            <span class="chip">Mode: <strong id="shortcut-mode-hint">Hold to record</strong></span>
+          </div>
+        </header>
 
         <section id="tab-home-panel" class="tab-panel is-active" role="tabpanel" aria-labelledby="tab-home" data-tab-panel="home">
           <section class="card primary-card">
             <div class="card-head">
-              <h2>Workspace Home</h2>
+              <h2>Home</h2>
               <p id="status">Loading...</p>
             </div>
             <div class="summary-grid">
@@ -51,30 +81,24 @@
               </div>
             </div>
             <div class="buttons">
-              <button id="home-toggle-btn" type="button">Start / Stop</button>
-              <button id="home-fast-mode-btn" class="ghost-btn" type="button">Toggle Fast Mode</button>
-              <button id="home-copy-last-btn" class="ghost-btn" type="button" disabled>Copy last transcript</button>
-              <button id="home-open-last-btn" class="ghost-btn" type="button" disabled>Open last output</button>
+              <button id="home-toggle-btn" type="button" class="ui-button">Start / Stop</button>
+              <button id="home-fast-mode-btn" type="button" class="ui-button ui-button-secondary">Toggle Fast Mode</button>
+              <button id="home-copy-last-btn" type="button" class="ui-button ui-button-secondary" disabled>Copy last transcript</button>
+              <button id="home-open-last-btn" type="button" class="ui-button ui-button-secondary" disabled>Open in History</button>
             </div>
             <p class="hint">Fast Mode: <strong id="home-fast-mode-state">OFF</strong> (OFF = cleaner output, ON = lower latency)</p>
-            <div class="chips" aria-label="Shortcut hints">
-              <span class="chip">Shortcut: <strong id="shortcut-primary-hint">Cmd+Shift+Space</strong></span>
-              <span class="chip">Mode hint: <strong id="shortcut-mode-hint">Hold to record</strong></span>
-              <span class="chip">Press <strong>Tab</strong> to move across controls</span>
-            </div>
             <div class="home-last-output">
               <p class="summary-label">Last output preview</p>
               <pre id="home-last-output-preview">No recent transcript yet.</pre>
               <p id="home-last-output-meta" class="hint">No history metadata yet.</p>
             </div>
-            <p class="hint">Use quick actions to reduce clicks; full details and reuse controls are available in the History tab.</p>
           </section>
         </section>
 
         <section id="tab-dictation-panel" class="tab-panel" role="tabpanel" aria-labelledby="tab-dictation" data-tab-panel="dictation" hidden>
           <section id="recording-card" class="card primary-card">
             <div class="card-head">
-              <h2>Dictation Control</h2>
+              <h2>Dictation</h2>
               <p id="mode-status-text">Hold-to-record mode active: hold the hotkey to record and release to stop.</p>
             </div>
             <div class="meter-row">
@@ -85,7 +109,7 @@
               <div id="mic-level-bar"></div>
             </div>
             <div class="buttons">
-              <button id="toggle-btn" type="button">Start / Stop Recording</button>
+              <button id="toggle-btn" type="button" class="ui-button">Start / Stop Recording</button>
             </div>
           </section>
         </section>
@@ -97,21 +121,21 @@
               <p class="subtle">Search, inspect, and reuse previous dictation outputs.</p>
             </div>
             <div class="history-toolbar">
-              <label>
-                Search
-                <input id="history-search" type="search" placeholder="Search transcript text, source app, or language" />
+              <label class="ui-field">
+                <span class="ui-label">Search</span>
+                <input id="history-search" class="ui-input" type="search" placeholder="Search transcript text, source app, or language" />
               </label>
-              <label>
-                Mode
-                <select id="history-filter-mode">
+              <label class="ui-field">
+                <span class="ui-label">Mode</span>
+                <select id="history-filter-mode" class="ui-select">
                   <option value="all">All modes</option>
                   <option value="hold">Hold</option>
                   <option value="toggle">Toggle</option>
                 </select>
               </label>
-              <label>
-                Language
-                <select id="history-filter-language">
+              <label class="ui-field">
+                <span class="ui-label">Language</span>
+                <select id="history-filter-language" class="ui-select">
                   <option value="all">All languages</option>
                   <option value="auto">Auto</option>
                   <option value="en">English (en)</option>
@@ -124,21 +148,21 @@
                   <option value="de">German (de)</option>
                 </select>
               </label>
-              <label>
-                Date
-                <select id="history-filter-date">
+              <label class="ui-field">
+                <span class="ui-label">Date</span>
+                <select id="history-filter-date" class="ui-select">
                   <option value="all">All time</option>
                   <option value="today">Today</option>
                   <option value="7d">Last 7 days</option>
                   <option value="30d">Last 30 days</option>
                 </select>
               </label>
-              <button id="history-clear-btn" class="ghost-btn" type="button">Clear history</button>
+              <button id="history-clear-btn" type="button" class="ui-button ui-button-secondary">Clear history</button>
             </div>
             <div class="history-performance-summary" aria-live="polite">
               <p><span class="history-performance-label">Filtered results</span> <strong id="history-summary-count">0</strong></p>
               <p><span class="history-performance-label">Median latency</span> <strong id="history-summary-median">n/a</strong></p>
-              <p><span class="history-performance-label">Slow runs (>= 4000ms)</span> <strong id="history-summary-slow">0%</strong></p>
+              <p><span class="history-performance-label">Slow runs (&gt;= 4000ms)</span> <strong id="history-summary-slow">0%</strong></p>
             </div>
             <div class="history-layout">
               <section class="history-list-wrap">
@@ -149,8 +173,8 @@
                 <div class="section-head">
                   <h3>Details</h3>
                   <div class="buttons">
-                    <button id="history-copy-btn" type="button" class="ghost-btn" disabled>Copy</button>
-                    <button id="history-reuse-btn" type="button" class="ghost-btn" disabled>Reuse in Home status</button>
+                    <button id="history-copy-btn" type="button" class="ui-button ui-button-secondary" disabled>Copy</button>
+                    <button id="history-reuse-btn" type="button" class="ui-button ui-button-secondary" disabled>Reuse in Home</button>
                   </div>
                 </div>
                 <p id="history-detail-meta" class="hint">Select an entry from the list.</p>
@@ -164,22 +188,22 @@
           <section id="settings-card" class="card">
             <div class="section-head">
               <h2>Settings</h2>
-              <button id="reopen-onboarding-btn" type="button" class="ghost-btn">Reopen onboarding</button>
+              <button id="reopen-onboarding-btn" type="button" class="ui-button ui-button-secondary">Reopen onboarding</button>
             </div>
-            <form id="settings-form">
+            <form id="settings-form" class="settings-form">
               <div class="setting-group">
                 <h3>Capture</h3>
                 <div class="field-grid">
-                  <label>
-                    Recording Mode
-                    <select id="recordingMode">
+                  <label class="ui-field">
+                    <span class="ui-label">Recording Mode</span>
+                    <select id="recordingMode" class="ui-select">
                       <option value="hold">Hold to record</option>
                       <option value="toggle">Toggle start/stop</option>
                     </select>
                   </label>
-                  <label>
-                    Transcription Language
-                    <select id="language">
+                  <label class="ui-field">
+                    <span class="ui-label">Transcription Language</span>
+                    <select id="language" class="ui-select">
                       <option value="auto">Auto detect</option>
                       <option value="en">English (en)</option>
                       <option value="zh">Chinese Simplified (zh)</option>
@@ -191,51 +215,55 @@
                       <option value="de">German (de)</option>
                     </select>
                   </label>
-                  <label>
-                    Whisper Model
-                    <input id="whisperModel" type="text" value="whisper-1" required />
+                  <label class="ui-field">
+                    <span class="ui-label">Whisper Model</span>
+                    <input id="whisperModel" class="ui-input" type="text" value="whisper-1" required />
                   </label>
-                  <label>
-                    Global Hotkey
-                    <input id="hotkey" type="text" value="Cmd+Shift+Space" required />
+                  <label class="ui-field hotkey-field">
+                    <span class="ui-label">Global Hotkey</span>
+                    <div class="hotkey-editor">
+                      <input id="hotkey" class="ui-input hotkey-display" type="text" value="Cmd+Shift+Space" readonly required />
+                      <button id="hotkey-capture-btn" type="button" class="ui-button ui-button-secondary">Edit hotkey</button>
+                      <button id="hotkey-cancel-btn" type="button" class="ui-button ui-button-secondary hidden">Cancel</button>
+                    </div>
                   </label>
                 </div>
                 <div class="preset-row">
-                  <button type="button" class="preset-btn" data-hotkey-preset="Cmd+Shift+Space">Cmd+Shift+Space</button>
-                  <button type="button" class="preset-btn" data-hotkey-preset="Cmd+Option+Space">Cmd+Option+Space</button>
-                  <button type="button" class="preset-btn" data-hotkey-preset="Ctrl+Space">Ctrl+Space</button>
+                  <button type="button" class="ui-button ui-button-secondary preset-btn" data-hotkey-preset="Cmd+Shift+Space">Cmd+Shift+Space</button>
+                  <button type="button" class="ui-button ui-button-secondary preset-btn" data-hotkey-preset="Cmd+Option+Space">Cmd+Option+Space</button>
+                  <button type="button" class="ui-button ui-button-secondary preset-btn" data-hotkey-preset="Ctrl+Space">Ctrl+Space</button>
                 </div>
-                <p class="hint">Use one or more modifiers plus exactly one key (example: Cmd+Shift+Space).</p>
+                <p class="hint">Click edit, press a shortcut once, and press Esc to cancel capture.</p>
                 <p id="hotkey-validation" class="field-message" role="status" aria-live="polite"></p>
               </div>
 
               <div class="setting-group">
-                <h3>Models & API</h3>
+                <h3>Models &amp; API</h3>
                 <div class="field-grid">
-                  <label>
-                    OpenAI API Key
-                    <input id="apiKey" type="password" autocomplete="off" placeholder="sk-..." required />
+                  <label class="ui-field">
+                    <span class="ui-label">OpenAI API Key</span>
+                    <input id="apiKey" class="ui-input" type="password" autocomplete="off" placeholder="sk-..." required />
                   </label>
-                  <label>
-                    API Base URL
-                    <input id="apiBaseUrl" type="text" value="https://api.openai.com/v1" required />
+                  <label class="ui-field">
+                    <span class="ui-label">API Base URL</span>
+                    <input id="apiBaseUrl" class="ui-input" type="text" value="https://api.openai.com/v1" required />
                   </label>
-                  <label>
-                    Formatter Model
-                    <input id="formatModel" type="text" value="gpt-4o-mini" required />
+                  <label class="ui-field">
+                    <span class="ui-label">Formatter Model</span>
+                    <input id="formatModel" class="ui-input" type="text" value="gpt-4o-mini" required />
                   </label>
                 </div>
               </div>
 
               <div class="setting-group">
                 <h3>Formatting</h3>
-                <label>
-                  Prompt Template
-                  <textarea id="promptTemplate" rows="6" required></textarea>
+                <label class="ui-field">
+                  <span class="ui-label">Prompt Template</span>
+                  <textarea id="promptTemplate" class="ui-input" rows="6" required></textarea>
                 </label>
-                <label>
-                  Custom Vocabulary
-                  <textarea id="customVocabulary" rows="3" placeholder="Domain terms, names, acronyms (comma or newline separated)"></textarea>
+                <label class="ui-field">
+                  <span class="ui-label">Custom Vocabulary</span>
+                  <textarea id="customVocabulary" class="ui-input" rows="3" placeholder="Domain terms, names, acronyms (comma or newline separated)"></textarea>
                 </label>
                 <label class="checkbox-label">
                   <input id="formatEnabled" type="checkbox" checked />
@@ -256,8 +284,8 @@
               </div>
 
               <div class="buttons">
-                <button type="submit">Save Settings</button>
-                <button id="test-api-btn" type="button">Test API Connection</button>
+                <button type="submit" class="ui-button">Save Settings</button>
+                <button id="test-api-btn" type="button" class="ui-button ui-button-secondary">Test API Connection</button>
               </div>
             </form>
           </section>
@@ -266,8 +294,8 @@
             <h2>Accessibility Permission</h2>
             <p id="accessibility-status">Not checked yet.</p>
             <div class="buttons">
-              <button id="check-accessibility-btn" type="button">Check Accessibility</button>
-              <button id="open-accessibility-settings-btn" type="button">Open Accessibility Settings</button>
+              <button id="check-accessibility-btn" type="button" class="ui-button ui-button-secondary">Check Accessibility</button>
+              <button id="open-accessibility-settings-btn" type="button" class="ui-button ui-button-secondary">Open Accessibility Settings</button>
             </div>
             <p class="hint">On macOS, grant Accessibility + Microphone permissions for best results.</p>
             <p class="hint">Privacy: clipboard context is optional, never stored by the app, and only sent when both formatting and clipboard context are enabled.</p>
@@ -283,8 +311,8 @@
           Typeless Lite needs Accessibility permission to paste into the currently focused input across apps and terminals.
         </p>
         <div class="buttons">
-          <button id="accessibility-modal-open-settings-btn" type="button">Open System Settings</button>
-          <button id="accessibility-modal-later-btn" type="button">Later</button>
+          <button id="accessibility-modal-open-settings-btn" type="button" class="ui-button">Open System Settings</button>
+          <button id="accessibility-modal-later-btn" type="button" class="ui-button ui-button-secondary">Later</button>
         </div>
       </section>
     </div>
@@ -307,8 +335,8 @@
           <h2>Permissions Checklist</h2>
           <p class="subtle">Accessibility allows Typeless Lite to insert text into the active app. Microphone permission is also required.</p>
           <div class="buttons">
-            <button id="onboarding-check-accessibility-btn" type="button">Check Accessibility</button>
-            <button id="onboarding-open-accessibility-settings-btn" type="button">Open System Settings</button>
+            <button id="onboarding-check-accessibility-btn" type="button" class="ui-button ui-button-secondary">Check Accessibility</button>
+            <button id="onboarding-open-accessibility-settings-btn" type="button" class="ui-button ui-button-secondary">Open System Settings</button>
           </div>
           <p id="onboarding-accessibility-status" class="hint">Not checked yet.</p>
         </section>
@@ -316,9 +344,9 @@
         <section class="onboarding-step hidden" data-onboarding-step="api">
           <h2>API Key Setup</h2>
           <p class="subtle">Paste your OpenAI API key. It will be saved locally in your app settings.</p>
-          <label>
-            OpenAI API Key
-            <input id="onboarding-api-key" type="password" autocomplete="off" placeholder="sk-..." />
+          <label class="ui-field">
+            <span class="ui-label">OpenAI API Key</span>
+            <input id="onboarding-api-key" class="ui-input" type="password" autocomplete="off" placeholder="sk-..." />
           </label>
         </section>
 
@@ -326,20 +354,24 @@
           <h2>Mode, Hotkey, and Language</h2>
           <p class="subtle">Choose your default capture behavior. You can change these anytime in Settings.</p>
           <div class="field-grid">
-            <label>
-              Recording Mode
-              <select id="onboarding-recording-mode">
+            <label class="ui-field">
+              <span class="ui-label">Recording Mode</span>
+              <select id="onboarding-recording-mode" class="ui-select">
                 <option value="hold">Hold to record</option>
                 <option value="toggle">Toggle start/stop</option>
               </select>
             </label>
-            <label>
-              Global Hotkey
-              <input id="onboarding-hotkey" type="text" value="Cmd+Shift+Space" />
+            <label class="ui-field hotkey-field">
+              <span class="ui-label">Global Hotkey</span>
+              <div class="hotkey-editor">
+                <input id="onboarding-hotkey" class="ui-input hotkey-display" type="text" value="Cmd+Shift+Space" readonly />
+                <button id="onboarding-hotkey-capture-btn" type="button" class="ui-button ui-button-secondary">Edit hotkey</button>
+                <button id="onboarding-hotkey-cancel-btn" type="button" class="ui-button ui-button-secondary hidden">Cancel</button>
+              </div>
             </label>
-            <label>
-              Language
-              <select id="onboarding-language">
+            <label class="ui-field">
+              <span class="ui-label">Language</span>
+              <select id="onboarding-language" class="ui-select">
                 <option value="auto">Auto detect</option>
                 <option value="en">English (en)</option>
                 <option value="zh">Chinese Simplified (zh)</option>
@@ -352,6 +384,12 @@
               </select>
             </label>
           </div>
+          <div class="preset-row">
+            <button type="button" class="ui-button ui-button-secondary preset-btn" data-onboarding-hotkey-preset="Cmd+Shift+Space">Cmd+Shift+Space</button>
+            <button type="button" class="ui-button ui-button-secondary preset-btn" data-onboarding-hotkey-preset="Cmd+Option+Space">Cmd+Option+Space</button>
+            <button type="button" class="ui-button ui-button-secondary preset-btn" data-onboarding-hotkey-preset="Ctrl+Space">Ctrl+Space</button>
+          </div>
+          <p id="onboarding-hotkey-validation" class="field-message" role="status" aria-live="polite"></p>
         </section>
 
         <section class="onboarding-step hidden" data-onboarding-step="finish">
@@ -361,10 +399,10 @@
         </section>
 
         <div class="buttons onboarding-actions">
-          <button id="onboarding-skip-btn" type="button" class="ghost-btn">Skip for now</button>
-          <button id="onboarding-back-btn" type="button" class="ghost-btn">Back</button>
-          <button id="onboarding-next-btn" type="button">Next</button>
-          <button id="onboarding-finish-btn" type="button" class="hidden">Finish setup</button>
+          <button id="onboarding-skip-btn" type="button" class="ui-button ui-button-secondary">Skip for now</button>
+          <button id="onboarding-back-btn" type="button" class="ui-button ui-button-secondary">Back</button>
+          <button id="onboarding-next-btn" type="button" class="ui-button">Next</button>
+          <button id="onboarding-finish-btn" type="button" class="ui-button hidden">Finish setup</button>
         </div>
       </section>
     </div>

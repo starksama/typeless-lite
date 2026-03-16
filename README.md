@@ -60,7 +60,11 @@ This MVP implements exactly that flow on macOS with Tauri and minimal UI.
 - paste into focused app using clipboard + `Cmd+V` fallback path
 - paste is non-destructive for text clipboard contents (restored shortly after simulated `Cmd+V`)
 - tray menu for open/toggle/quit
-- modern desktop UI with sidebar nav, top quick-status chips, recording control card, and grouped settings sections
+- modern desktop UI with tabbed workspace (`Home`, `Dictation`, `History`, `Settings`)
+- smoother interaction shell with clear focus states, keyboard tab navigation, and lightweight motion transitions
+- first-run onboarding wizard (welcome, permissions, API key, quick defaults, finish) with local completion persistence and manual reopen from Settings
+- transcript history center with local persistence, search, filters (mode/language/date), detail panel, copy/reuse actions, and clear-with-confirm
+- Home quick actions for efficient workflow: start/stop, copy last transcript, and reopen latest output
 - upgraded hotkey UX with active-hotkey display, quick preset buttons, and inline validation messages
 - transcription language selector (`auto` by default) with explicit language override support
 - settings persisted to app config dir JSON
@@ -69,7 +73,7 @@ This MVP implements exactly that flow on macOS with Tauri and minimal UI.
 
 ## Project Layout
 
-- `src/`: minimal settings frontend (Vite + TypeScript)
+- `src/`: tabbed frontend (Vite + TypeScript) with onboarding + history center
 - `src-tauri/src/main.rs`: hotkey, audio capture, API pipeline, paste logic, tray
 - `src-tauri/capabilities/default.json`: global-shortcut permissions
 - `.env.example`: environment template (no secrets committed)
@@ -133,6 +137,33 @@ Open the app window and configure:
   - `auto` omits the `language` field on the Whisper request for auto-detection
   - explicit values include `en`, `zh`, `zh-TW`, `ja`, `ko`, `es`, `fr`, `de`
 - `Prompt Template` (base formatting instruction; runtime context hints are appended automatically)
+
+## UI Workflow
+
+- `Home` tab:
+  - status at a glance (hotkey/mode/language/state chips)
+  - quick actions (`Start / Stop`, `Copy last transcript`, `Open last output`)
+  - shortcut hints and latest transcript preview to reduce context switching
+- `Dictation` tab:
+  - recording controls + live mic meter + mode guidance
+- `History` tab:
+  - full local transcript archive with timestamp, mode, language, source app (when detected), and final output
+  - search + quick filters + detail panel for copy/reuse
+- `Settings` tab:
+  - capture/model/API/formatting settings
+  - permission helper actions
+  - `Reopen onboarding` entry point
+
+## First-Run Onboarding
+
+- On first launch, onboarding opens automatically and stores completion locally.
+- Steps:
+  - welcome
+  - permissions checklist
+  - API key setup
+  - mode/hotkey/language quick setup
+  - finish
+- You can reopen onboarding at any time from `Settings`.
 
 Transcription prompt behavior:
 - When `Custom Vocabulary` and/or clipboard reference context is available, the app sends a single concise deterministic Whisper `prompt` combining whichever sources exist.
