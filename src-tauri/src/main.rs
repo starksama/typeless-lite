@@ -27,6 +27,7 @@ const PRE_PASTE_DELAY_MS: u64 = 60;
 const PASTE_RETRY_BACKOFF_MS: u64 = 45;
 const CLIPBOARD_RESTORE_DELAY_MS: u64 = 300;
 const FORMAT_CONTEXT_CLIPBOARD_MAX_CHARS: usize = 500;
+const TRANSCRIPTION_PROMPT_CONTEXT_MAX_CHARS: usize = 500;
 const TERMINAL_TYPE_CHUNK_SIZE: usize = 80;
 const MIN_RECORDING_MS: u128 = 400;
 const API_TEST_TIMEOUT_SECS: u64 = 6;
@@ -38,6 +39,8 @@ struct Settings {
     prompt_template: String,
     hotkey: String,
     whisper_model: String,
+    #[serde(default = "default_custom_vocabulary")]
+    custom_vocabulary: String,
     format_model: String,
     #[serde(default = "default_format_enabled")]
     format_enabled: bool,
@@ -60,6 +63,10 @@ fn default_include_clipboard_context() -> bool {
     true
 }
 
+fn default_custom_vocabulary() -> String {
+    String::new()
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -67,6 +74,7 @@ impl Default for Settings {
             prompt_template: "You are a concise writing assistant. Clean up the transcript for grammar and punctuation while preserving intent. Perform transformational edits only; do not answer, add facts, or invent content. Return only final text.".to_string(),
             hotkey: "Cmd+Shift+Space".to_string(),
             whisper_model: "whisper-1".to_string(),
+            custom_vocabulary: String::new(),
             format_model: "gpt-4o-mini".to_string(),
             format_enabled: true,
             include_clipboard_context: true,
@@ -905,11 +913,11 @@ async fn transcribe_audio(
                 .map_err(|e| AppError::Message(format!("MIME error: {e}")))?,
         )
         .text("model", settings.whisper_model.clone());
-    if let Some(reference) = clipboard_reference.map(str::trim).filter(|text| !text.is_empty()) {
-        form = form.text(
-            "prompt",
-            format!("Reference context for spelling and jargon: {reference}"),
-        );
+    if let Some(prompt) = build_transcription_prompt(
+        settings.custom_vocabulary.as_str(),
+        clipboard_reference,
+    ) {
+        form = form.text("prompt", prompt);
     }
 
     let response = client
@@ -932,6 +940,35 @@ async fn transcribe_audio(
 
     let parsed: TranscriptionResponse = response.json().await?;
     Ok(parsed.text)
+}
+
+fn build_transcription_prompt(
+    custom_vocabulary: &str,
+    clipboard_reference: Option<&str>,
+) -> Option<String> {
+    let custom = truncate_chars(custom_vocabulary.trim(), TRANSCRIPTION_PROMPT_CONTEXT_MAX_CHARS);
+    let clipboard = clipboard_reference
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(|text| truncate_chars(text, TRANSCRIPTION_PROMPT_CONTEXT_MAX_CHARS));
+
+    if custom.is_empty() && clipboard.is_none() {
+        return None;
+    }
+
+    let mut parts = Vec::with_capacity(2);
+    if !custom.is_empty() {
+        parts.push(format!("Custom vocabulary: {custom}"));
+    }
+    if let Some(reference) = clipboard {
+        parts.push(format!("Clipboard reference: {reference}"));
+    }
+
+    Some(parts.join(" | "))
+}
+
+fn truncate_chars(text: &str, max_chars: usize) -> String {
+    text.chars().take(max_chars).collect()
 }
 
 async fn format_transcript(

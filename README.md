@@ -110,6 +110,7 @@ Open the app window and configure:
 - `API Key` (required)
 - `API Base URL` (default `https://api.openai.com/v1`; supports compatible providers)
 - `Whisper Model` (default `whisper-1`)
+- `Custom Vocabulary` (optional; domain terms/names/acronyms sent as Whisper prompt guidance to improve transcription accuracy)
 - `Formatter Model` (default `gpt-4o-mini`)
 - `Run LLM formatting pass` (on by default; disable for lower latency/cost)
 - `Include clipboard context for formatter` (on by default; when enabled, clipboard text may be sent as optional context during formatting)
@@ -117,10 +118,15 @@ Open the app window and configure:
 - `Global Hotkey` (default `Cmd+Shift+Space`)
 - `Prompt Template` (base formatting instruction; runtime context hints are appended automatically)
 
+Transcription prompt behavior:
+- When `Custom Vocabulary` and/or clipboard reference context is available, the app sends a single concise deterministic Whisper `prompt` combining whichever sources exist.
+- If both are empty, no transcription prompt guidance is sent.
+
 ## Security Notes
 
 - API keys are user-provided and saved locally in app config.
 - Optional clipboard reference context is used transiently for formatting only, is never stored by the app, and is only sent when both `Run LLM formatting pass` and `Include clipboard context for formatter` are enabled.
+- Optional custom vocabulary is persisted in local settings and sent only as transcription guidance.
 - No secrets are hardcoded.
 - `.env.example` is provided only as a template.
 

@@ -7,6 +7,7 @@ type Settings = {
   prompt_template: string;
   hotkey: string;
   whisper_model: string;
+  custom_vocabulary: string;
   format_model: string;
   format_enabled: boolean;
   include_clipboard_context: boolean;
@@ -42,6 +43,7 @@ const apiKeyInput = document.querySelector<HTMLInputElement>('#apiKey')!;
 const promptTemplateInput = document.querySelector<HTMLTextAreaElement>('#promptTemplate')!;
 const hotkeyInput = document.querySelector<HTMLInputElement>('#hotkey')!;
 const whisperModelInput = document.querySelector<HTMLInputElement>('#whisperModel')!;
+const customVocabularyInput = document.querySelector<HTMLTextAreaElement>('#customVocabulary')!;
 const formatModelInput = document.querySelector<HTMLInputElement>('#formatModel')!;
 const formatEnabledInput = document.querySelector<HTMLInputElement>('#formatEnabled')!;
 const includeClipboardContextInput = document.querySelector<HTMLInputElement>('#includeClipboardContext')!;
@@ -83,6 +85,7 @@ async function loadInitial(): Promise<void> {
   promptTemplateInput.value = settings.prompt_template || defaultPrompt;
   hotkeyInput.value = settings.hotkey;
   whisperModelInput.value = settings.whisper_model;
+  customVocabularyInput.value = settings.custom_vocabulary || '';
   formatModelInput.value = settings.format_model;
   formatEnabledInput.checked = settings.format_enabled;
   includeClipboardContextInput.checked = settings.include_clipboard_context;
@@ -107,6 +110,7 @@ form.addEventListener('submit', async (event) => {
     prompt_template: promptTemplateInput.value.trim() || defaultPrompt,
     hotkey: hotkeyInput.value.trim(),
     whisper_model: whisperModelInput.value.trim() || 'whisper-1',
+    custom_vocabulary: customVocabularyInput.value.trim(),
     format_model: formatModelInput.value.trim() || 'gpt-4o-mini',
     format_enabled: formatEnabledInput.checked,
     include_clipboard_context: includeClipboardContextInput.checked,
