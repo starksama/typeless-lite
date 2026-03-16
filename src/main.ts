@@ -47,6 +47,14 @@ type TranscriptHistoryEntry = {
   processing_latency_ms?: number | null;
 };
 
+type DurableDraft = {
+  text: string;
+  created_at_ms: number;
+  recording_mode: RecordingMode;
+  language: TranscriptionLanguage;
+  source_app?: string | null;
+};
+
 type WorkspaceTab = 'home' | 'dictation' | 'history' | 'settings';
 type OnboardingStepId = 'welcome' | 'permissions' | 'api' | 'quick-setup' | 'finish';
 type HotkeyCaptureTarget = 'settings' | 'onboarding';
@@ -97,6 +105,10 @@ const micLevelBarEl = document.querySelector<HTMLDivElement>('#mic-level-bar')!;
 const accessibilityStatusEl = document.querySelector<HTMLParagraphElement>('#accessibility-status')!;
 const form = document.querySelector<HTMLFormElement>('#settings-form')!;
 const toggleBtn = document.querySelector<HTMLButtonElement>('#toggle-btn')!;
+const draftRestoreBannerEl = document.querySelector<HTMLDivElement>('#draft-restore-banner')!;
+const draftRestorePreviewEl = document.querySelector<HTMLParagraphElement>('#draft-restore-preview')!;
+const draftRestoreCopyBtn = document.querySelector<HTMLButtonElement>('#draft-restore-copy-btn')!;
+const draftRestoreDismissBtn = document.querySelector<HTMLButtonElement>('#draft-restore-dismiss-btn')!;
 const testApiBtn = document.querySelector<HTMLButtonElement>('#test-api-btn')!;
 const checkAccessibilityBtn = document.querySelector<HTMLButtonElement>('#check-accessibility-btn')!;
 const openAccessibilitySettingsBtn = document.querySelector<HTMLButtonElement>('#open-accessibility-settings-btn')!;
@@ -197,6 +209,7 @@ const onboardingStepOrder: OnboardingStepId[] = ['welcome', 'permissions', 'api'
 let onboardingStepIndex = 0;
 let historyEntries: TranscriptHistoryEntry[] = [];
 let historySelectedEntryId: number | null = null;
+let durableDraft: DurableDraft | null = null;
 const TOGGLE_PENDING_TIMEOUT_MS = 3000;
 let lastRuntimeStatus: RuntimeStatus | null = null;
 let togglePendingAction: 'starting' | 'stopping' | null = null;
@@ -786,6 +799,23 @@ function refreshHomeLastOutputPreview(): void {
   } | ${formatLatency(latestEntry.processing_latency_ms)}`;
 }
 
+function renderDurableDraft(draft: DurableDraft | null): void {
+  durableDraft = draft;
+  const hasDraft = Boolean(draft && draft.text.trim());
+  draftRestoreBannerEl.classList.toggle('hidden', !hasDraft);
+  if (!hasDraft || !draft) {
+    draftRestorePreviewEl.textContent = 'No saved draft.';
+    return;
+  }
+
+  const preview = draft.text.trim();
+  const previewText = preview.length > 220 ? `${preview.slice(0, 220).trimEnd()}...` : preview;
+  const sourceApp = draft.source_app?.trim() || 'Unknown app';
+  draftRestorePreviewEl.textContent = `${formatHistoryTimestamp(
+    draft.created_at_ms
+  )} | ${recordingModeLabel(draft.recording_mode)} | ${languageLabel(draft.language)} | ${sourceApp}\n${previewText}`;
+}
+
 function historyDateFilterMatch(entry: TranscriptHistoryEntry, filter: string): boolean {
   if (filter === 'all') return true;
   const now = Date.now();
@@ -946,6 +976,8 @@ async function loadInitial(): Promise<void> {
   const status = await invoke<RuntimeStatus>('get_runtime_status');
   renderStatus(status);
   await loadHistory();
+  const draft = await invoke<DurableDraft | null>('get_durable_draft');
+  renderDurableDraft(draft);
 
   accessibilityStatusEl.textContent = 'Checking Accessibility permission...';
   try {
@@ -1068,6 +1100,31 @@ homeOpenLastBtn.addEventListener('click', () => {
   historySelectedEntryId = latestEntry.id;
   renderHistory(historyEntries);
   setActiveTab('history');
+});
+
+draftRestoreCopyBtn.addEventListener('click', async () => {
+  if (!durableDraft?.text?.trim()) return;
+  draftRestoreCopyBtn.disabled = true;
+  try {
+    await invoke('copy_text_to_clipboard', { text: durableDraft.text });
+    statusEl.textContent = 'Recovered draft copied to clipboard.';
+  } catch (error) {
+    statusEl.textContent = `Copy failed: ${String(error)}`;
+  } finally {
+    draftRestoreCopyBtn.disabled = false;
+  }
+});
+
+draftRestoreDismissBtn.addEventListener('click', async () => {
+  draftRestoreDismissBtn.disabled = true;
+  try {
+    await invoke('clear_durable_draft');
+    statusEl.textContent = 'Saved draft discarded.';
+  } catch (error) {
+    statusEl.textContent = `Failed to discard draft: ${String(error)}`;
+  } finally {
+    draftRestoreDismissBtn.disabled = false;
+  }
 });
 
 testApiBtn.addEventListener('click', async () => {
@@ -1224,6 +1281,12 @@ listen<TranscriptHistoryEntry[]>('transcript-history-updated', (event) => {
   renderHistory(event.payload);
 }).catch((error) => {
   statusEl.textContent = `History listener failed: ${String(error)}`;
+});
+
+listen<DurableDraft | null>('durable-draft-updated', (event) => {
+  renderDurableDraft(event.payload);
+}).catch((error) => {
+  statusEl.textContent = `Draft listener failed: ${String(error)}`;
 });
 
 listen<RuntimeStatus>('runtime-status', (event) => {

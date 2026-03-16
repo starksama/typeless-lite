@@ -433,6 +433,22 @@ textarea.ui-input {
   overflow: hidden;
 }
 
+.draft-restore {
+  margin-top: 10px;
+  border: 1px solid #c5d9f0;
+  border-radius: 10px;
+  background: #f4f9ff;
+  padding: 10px;
+  display: grid;
+  gap: 7px;
+}
+
+#draft-restore-preview {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 #mic-level-bar {
   height: 100%;
   width: 0%;

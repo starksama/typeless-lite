@@ -13,3 +13,16 @@
   - `docs/NEXT_ITERATION.md`
 - Validation result:
   - `yarn build` (pass)
+
+## 2026-03-16T08:39:00Z
+- Area worked: dictation reliability
+- User value: Prevents losing long dictations when formatting/paste/API steps fail by keeping a recoverable durable draft.
+- Files changed:
+  - `src-tauri/src/main.rs`
+  - `src/main.ts`
+  - `src/style.css`
+  - `index.html`
+  - `docs/ITERATION_LOG.md`
+  - `docs/NEXT_ITERATION.md`
+- Validation result:
+  - `yarn build` (pass)

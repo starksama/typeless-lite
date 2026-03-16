@@ -1,3 +1,3 @@
-1. Add hotkey conflict preflight in UI before save (hotkey UX). Success criteria: when a user enters an unavailable shortcut, UI shows conflict guidance and one-click suggested fallback before invoking backend save.
-2. Add transcript history export to `.txt` and `.json` (history). Success criteria: user can export current filtered history in one click, and exported file count matches visible filtered entry count.
-3. Add retry with bounded backoff for transient transcription API failures (reliability). Success criteria: for simulated 429/5xx failures, at least one automatic retry occurs and success rate improves without duplicate pastes.
+1. Add hotkey conflict preflight in UI before save (hotkey UX). Success criteria: unavailable shortcuts show conflict guidance and one-click suggested fallback before backend save.
+2. Add transcript history export to `.txt` and `.json` (history). Success criteria: one-click export for current filtered history; exported entry count matches visible filtered count.
+3. Add bounded retry/backoff plus explicit restore CTA for draft-recovery failures (reliability hardening). Success criteria: simulated 429/5xx paths retry safely and keep single-paste behavior with recoverable draft still intact.
