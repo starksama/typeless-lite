@@ -1561,7 +1561,7 @@ fn paste_text(text: &str) -> Result<(), AppError> {
     }
     let output = output?;
 
-    restore_clipboard_after_delay(original_text);
+    restore_clipboard_after_delay(original_text, text.to_string());
 
     if !output.status.success() {
         #[cfg(target_os = "macos")]
@@ -1584,7 +1584,7 @@ fn paste_text(text: &str) -> Result<(), AppError> {
     Ok(())
 }
 
-fn restore_clipboard_after_delay(original_text: Option<String>) {
+fn restore_clipboard_after_delay(original_text: Option<String>, temporary_text: String) {
     let Some(original_text) = original_text else {
         return;
     };
@@ -1593,8 +1593,18 @@ fn restore_clipboard_after_delay(original_text: Option<String>) {
         thread::sleep(Duration::from_millis(CLIPBOARD_RESTORE_DELAY_MS));
         match arboard::Clipboard::new() {
             Ok(mut clipboard) => {
-                if let Err(e) = clipboard.set_text(original_text) {
-                    eprintln!("Clipboard restore failed: {e}");
+                // Safety guard: only restore if our temporary dictation text is still present.
+                // If the user copied something else after paste, leave their clipboard untouched.
+                match clipboard.get_text() {
+                    Ok(current_text) if current_text == temporary_text => {
+                        if let Err(e) = clipboard.set_text(original_text) {
+                            eprintln!("Clipboard restore failed: {e}");
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        eprintln!("Clipboard read failed during restore; leaving clipboard unchanged: {e}");
+                    }
                 }
             }
             Err(e) => {
