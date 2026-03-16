@@ -23,6 +23,7 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 
 const APP_STATUS_EVENT: &str = "runtime-status";
 const TRAY_ID: &str = "main-tray";
+const PRE_RECORDING_COPY_DELAY_MS: u64 = 80;
 const PRE_PASTE_DELAY_MS: u64 = 60;
 const PASTE_RETRY_BACKOFF_MS: u64 = 45;
 const CLIPBOARD_RESTORE_DELAY_MS: u64 = 300;
@@ -202,6 +203,7 @@ struct RecorderSession {
     writer: Arc<Mutex<Option<hound::WavWriter<BufWriter<std::fs::File>>>>>,
     path: PathBuf,
     started_at: Instant,
+    pre_recording_clipboard_context: Option<String>,
 }
 
 #[derive(Clone)]
@@ -233,7 +235,7 @@ enum AppError {
 }
 
 impl RecorderSession {
-    fn stop(self) -> Result<(PathBuf, Duration), AppError> {
+    fn stop(self) -> Result<(PathBuf, Duration, Option<String>), AppError> {
         let elapsed = self.started_at.elapsed();
         drop(self.stream);
         let mut writer_lock = self
@@ -245,7 +247,7 @@ impl RecorderSession {
                 .finalize()
                 .map_err(|e| AppError::Message(format!("Failed to finalize WAV: {e}")))?;
         }
-        Ok((self.path, elapsed))
+        Ok((self.path, elapsed, self.pre_recording_clipboard_context))
     }
 }
 
@@ -338,6 +340,9 @@ fn save_settings(app: AppHandle, state: State<AppState>, settings: Settings) -> 
     normalized_settings.recording_mode = normalized_mode.clone();
     normalized_settings.language = normalized_language.clone();
 
+    let registration = register_shortcut_with_fallback(&app, &state, &normalized_settings.hotkey)?;
+    normalized_settings.hotkey = registration.active_hotkey.clone();
+
     {
         let mut lock = state
             .settings
@@ -347,20 +352,22 @@ fn save_settings(app: AppHandle, state: State<AppState>, settings: Settings) -> 
     }
 
     persist_settings(&app, &normalized_settings).map_err(|e| e.to_string())?;
-    register_shortcut(&app, &state, &normalized_settings.hotkey)?;
-    set_status(
-        &app,
-        &state,
-        None,
-        None,
-        None,
-        format!(
+    let status_message = match registration.fallback_from {
+        Some(requested_hotkey) => format!(
+            "Requested hotkey '{}' was unavailable. Applied fallback '{}' and saved it. Mode: {} | Language: {}",
+            requested_hotkey,
+            normalized_settings.hotkey,
+            recording_mode_label(&normalized_settings.recording_mode),
+            transcription_language_label(&normalized_settings.language),
+        ),
+        None => format!(
             "Settings saved. Hotkey: {} | Mode: {} | Language: {}",
             normalized_settings.hotkey,
             recording_mode_label(&normalized_settings.recording_mode),
             transcription_language_label(&normalized_settings.language),
         ),
-    );
+    };
+    set_status(&app, &state, None, None, None, status_message);
     Ok(())
 }
 
@@ -797,20 +804,70 @@ fn update_tray_status(app: &AppHandle, status: &RuntimeStatus) {
     }
 }
 
-fn register_shortcut(app: &AppHandle, state: &State<AppState>, hotkey: &str) -> Result<(), String> {
-    let shortcut = hotkey
-        .parse::<Shortcut>()
-        .map_err(|e| format!("Invalid hotkey '{hotkey}': {e}"))?;
+struct ShortcutRegistrationResult {
+    active_hotkey: String,
+    fallback_from: Option<String>,
+}
 
+#[cfg(target_os = "macos")]
+fn platform_hotkey_fallbacks() -> &'static [&'static str] {
+    &["Cmd+Shift+Space", "Cmd+Option+Space", "Cmd+Shift+V"]
+}
+
+#[cfg(not(target_os = "macos"))]
+fn platform_hotkey_fallbacks() -> &'static [&'static str] {
+    &["Ctrl+Shift+Space", "Ctrl+Alt+Space", "Ctrl+Shift+V"]
+}
+
+fn register_shortcut_with_fallback(
+    app: &AppHandle,
+    state: &State<AppState>,
+    hotkey: &str,
+) -> Result<ShortcutRegistrationResult, String> {
     if let Ok(mut lock) = state.current_shortcut.lock() {
         if let Some(existing) = lock.take() {
             let _ = app.global_shortcut().unregister(existing);
         }
-        app.global_shortcut()
-            .register(shortcut)
-            .map_err(|e| format!("Failed to register hotkey: {e}"))?;
-        *lock = Some(shortcut);
-        Ok(())
+
+        let mut candidates: Vec<String> = vec![hotkey.to_string()];
+        for fallback in platform_hotkey_fallbacks() {
+            if !candidates.iter().any(|candidate| candidate == fallback) {
+                candidates.push((*fallback).to_string());
+            }
+        }
+
+        let mut failures: Vec<String> = Vec::new();
+
+        for candidate in candidates {
+            let shortcut = match candidate.parse::<Shortcut>() {
+                Ok(shortcut) => shortcut,
+                Err(e) => {
+                    failures.push(format!("'{candidate}': {e}"));
+                    continue;
+                }
+            };
+
+            match app.global_shortcut().register(shortcut) {
+                Ok(()) => {
+                    *lock = Some(shortcut);
+                    let fallback_from = if candidate == hotkey {
+                        None
+                    } else {
+                        Some(hotkey.to_string())
+                    };
+                    return Ok(ShortcutRegistrationResult {
+                        active_hotkey: candidate,
+                        fallback_from,
+                    });
+                }
+                Err(e) => failures.push(format!("'{candidate}': {e}")),
+            }
+        }
+
+        Err(format!(
+            "Failed to register hotkey. Attempted: {}",
+            failures.join(" | ")
+        ))
     } else {
         Err("Failed to lock shortcut state".to_string())
     }
@@ -825,20 +882,30 @@ fn toggle_recording_inner(app: &AppHandle, state: &State<AppState>) -> Result<()
         if lock.is_some() {
             lock.take()
         } else {
-            let mode_hint = state
+            let (mode_hint, include_clipboard_context) = state
                 .settings
                 .lock()
                 .map(|settings| {
-                    if is_toggle_mode(&settings) {
+                    let hint = if is_toggle_mode(&settings) {
                         "Recording... press hotkey again to stop (or toggle manually).".to_string()
                     } else {
                         "Recording... release hotkey to stop (or toggle manually).".to_string()
-                    }
+                    };
+                    (hint, settings.include_clipboard_context)
                 })
                 .unwrap_or_else(|_| {
-                    "Recording... release hotkey to stop (or toggle manually).".to_string()
+                    (
+                        "Recording... release hotkey to stop (or toggle manually).".to_string(),
+                        false,
+                    )
                 });
-            let session = start_recording(app).map_err(|e| e.to_string())?;
+            let pre_recording_clipboard_context = if include_clipboard_context {
+                capture_selected_text_context_on_record_start()
+            } else {
+                None
+            };
+            let session =
+                start_recording(app, pre_recording_clipboard_context).map_err(|e| e.to_string())?;
             *lock = Some(session);
             set_status(app, state, Some(true), Some(false), Some(0), mode_hint);
             play_earcon_if_enabled(state, Earcon::Start);
@@ -847,7 +914,8 @@ fn toggle_recording_inner(app: &AppHandle, state: &State<AppState>) -> Result<()
     };
 
     if let Some(session) = maybe_session {
-        let (wav_path, elapsed) = session.stop().map_err(|e| e.to_string())?;
+        let (wav_path, elapsed, pre_recording_clipboard_context) =
+            session.stop().map_err(|e| e.to_string())?;
         if elapsed.as_millis() < MIN_RECORDING_MS {
             let _ = fs::remove_file(&wav_path);
             set_status(
@@ -876,8 +944,14 @@ fn toggle_recording_inner(app: &AppHandle, state: &State<AppState>) -> Result<()
         tauri::async_runtime::spawn(async move {
             let app_state: State<AppState> = app_handle.state();
             if let Err(err) =
-                process_audio_pipeline(&app_handle, &app_state, wav_path, processing_started_at)
-                    .await
+                process_audio_pipeline(
+                    &app_handle,
+                    &app_state,
+                    wav_path,
+                    pre_recording_clipboard_context,
+                    processing_started_at,
+                )
+                .await
             {
                 set_status(
                     &app_handle,
@@ -895,7 +969,10 @@ fn toggle_recording_inner(app: &AppHandle, state: &State<AppState>) -> Result<()
     Ok(())
 }
 
-fn start_recording(app: &AppHandle) -> Result<RecorderSession, AppError> {
+fn start_recording(
+    app: &AppHandle,
+    pre_recording_clipboard_context: Option<String>,
+) -> Result<RecorderSession, AppError> {
     let host = cpal::default_host();
     let device = host
         .default_input_device()
@@ -986,6 +1063,7 @@ fn start_recording(app: &AppHandle) -> Result<RecorderSession, AppError> {
         writer,
         path,
         started_at: Instant::now(),
+        pre_recording_clipboard_context,
     })
 }
 
@@ -1063,6 +1141,7 @@ async fn process_audio_pipeline(
     app: &AppHandle,
     state: &State<'_, AppState>,
     wav_path: PathBuf,
+    pre_recording_clipboard_context: Option<String>,
     processing_started_at: Instant,
 ) -> Result<(), AppError> {
     let pipeline_result = async {
@@ -1081,7 +1160,7 @@ async fn process_audio_pipeline(
         // Capture local context once before network calls to avoid drift.
         let active_app_name = detect_frontmost_app_name();
         let clipboard_reference = if settings.include_clipboard_context {
-            capture_clipboard_reference_context()
+            pre_recording_clipboard_context.or_else(capture_clipboard_reference_context)
         } else {
             None
         };
@@ -1419,6 +1498,10 @@ fn tokenize_for_overlap(text: &str) -> HashSet<String> {
 fn capture_clipboard_reference_context() -> Option<String> {
     let mut clipboard = arboard::Clipboard::new().ok()?;
     let text = clipboard.get_text().ok()?;
+    clip_clipboard_context(&text)
+}
+
+fn clip_clipboard_context(text: &str) -> Option<String> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return None;
@@ -1430,6 +1513,25 @@ fn capture_clipboard_reference_context() -> Option<String> {
     }
 
     Some(clipped)
+}
+
+#[cfg(target_os = "macos")]
+fn capture_selected_text_context_on_record_start() -> Option<String> {
+    let output = Command::new("osascript")
+        .arg("-e")
+        .arg("tell application \"System Events\" to keystroke \"c\" using command down")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    thread::sleep(Duration::from_millis(PRE_RECORDING_COPY_DELAY_MS));
+    capture_clipboard_reference_context()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn capture_selected_text_context_on_record_start() -> Option<String> {
+    None
 }
 
 #[cfg(target_os = "macos")]
@@ -1683,8 +1785,27 @@ fn main() {
             app.manage(state);
 
             let app_state: State<AppState> = app.state();
-            register_shortcut(app.handle(), &app_state, &settings.hotkey)
+            let registration = register_shortcut_with_fallback(app.handle(), &app_state, &settings.hotkey)
                 .map_err(|e| Box::<dyn std::error::Error>::from(e.to_string()))?;
+            if let Some(requested_hotkey) = registration.fallback_from {
+                if let Ok(mut state_settings) = app_state.settings.lock() {
+                    state_settings.hotkey = registration.active_hotkey.clone();
+                    if let Err(error) = persist_settings(app.handle(), &state_settings) {
+                        eprintln!("Failed to persist fallback hotkey: {error}");
+                    }
+                }
+                set_status(
+                    app.handle(),
+                    &app_state,
+                    None,
+                    None,
+                    None,
+                    format!(
+                        "Requested hotkey '{}' was unavailable at startup. Applied fallback '{}' and saved it.",
+                        requested_hotkey, registration.active_hotkey
+                    ),
+                );
+            }
             emit_transcript_history(app.handle(), &app_state);
 
             let open_item = MenuItem::with_id(app, "open", "Open Settings", true, None::<&str>)?;
