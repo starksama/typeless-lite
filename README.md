@@ -93,6 +93,10 @@ Build bundle:
 yarn tauri:build
 ```
 
+## Troubleshooting
+
+- Intel macOS + stable Rust + `zerocopy` AVX512 `E0658`: this repo now includes a root Cargo cfg override at `.cargo/config.toml` so `yarn tauri:dev` from repo root picks up the workaround automatically.
+
 ## macOS Permissions (Required)
 
 1. Microphone:
