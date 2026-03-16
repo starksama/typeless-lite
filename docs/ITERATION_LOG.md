@@ -1,5 +1,17 @@
 # Iteration Log
 
+## 2026-03-16T10:09:34Z
+- Area worked: hotkey UX
+- User value: Adds editable custom conflict fallback mappings with local persistence so preflight suggestions remain one-click while allowing per-user overrides.
+- Files changed:
+  - `src/main.ts`
+  - `index.html`
+  - `src/style.css`
+  - `docs/ITERATION_LOG.md`
+  - `docs/NEXT_ITERATION.md`
+- Validation result:
+  - `yarn build` (pass)
+
 ## 2026-03-16T09:37:56Z
 - Area worked: history export
 - User value: Adds one-click export of currently filtered transcript history to `.txt` and `.json` with count-aware filenames.

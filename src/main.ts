@@ -101,7 +101,7 @@ type HotkeyConflictInfo = {
   fallback: string;
 };
 
-const HOTKEY_CONFLICTS: Record<string, HotkeyConflictInfo> = {
+const DEFAULT_HOTKEY_CONFLICTS: Record<string, HotkeyConflictInfo> = {
   'Cmd+Space': {
     reason: 'Commonly reserved by macOS Spotlight.',
     fallback: 'Cmd+Shift+Space'
@@ -170,6 +170,10 @@ const hotkeyValidationEl = document.querySelector<HTMLParagraphElement>('#hotkey
 const hotkeySuggestionBtn = document.querySelector<HTMLButtonElement>('#hotkey-suggestion-btn')!;
 const hotkeyCaptureBtn = document.querySelector<HTMLButtonElement>('#hotkey-capture-btn')!;
 const hotkeyCancelBtn = document.querySelector<HTMLButtonElement>('#hotkey-cancel-btn')!;
+const hotkeyFallbackMappingsInput = document.querySelector<HTMLTextAreaElement>('#hotkey-fallback-mappings')!;
+const hotkeyFallbackMappingsSaveBtn = document.querySelector<HTMLButtonElement>('#hotkey-fallback-mappings-save-btn')!;
+const hotkeyFallbackMappingsResetBtn = document.querySelector<HTMLButtonElement>('#hotkey-fallback-mappings-reset-btn')!;
+const hotkeyFallbackMappingsStatusEl = document.querySelector<HTMLParagraphElement>('#hotkey-fallback-mappings-status')!;
 const quickPresetButtons = document.querySelectorAll<HTMLButtonElement>('[data-hotkey-preset]');
 const onboardingHotkeyPresetButtons = document.querySelectorAll<HTMLButtonElement>('[data-onboarding-hotkey-preset]');
 const activeHotkeyChipEl = document.querySelector<HTMLSpanElement>('#active-hotkey-chip')!;
@@ -245,6 +249,7 @@ let isSidebarCollapsed = false;
 let activeHotkeyCaptureTarget: HotkeyCaptureTarget | null = null;
 const ONBOARDING_COMPLETED_KEY = 'typeless:onboarding-complete:v1';
 const SIDEBAR_COLLAPSED_KEY = 'typeless:sidebar-collapsed:v1';
+const HOTKEY_CUSTOM_CONFLICTS_KEY = 'typeless:hotkey-custom-conflicts:v1';
 const onboardingStepOrder: OnboardingStepId[] = ['welcome', 'permissions', 'api', 'quick-setup', 'finish'];
 let onboardingStepIndex = 0;
 let historyEntries: TranscriptHistoryEntry[] = [];
@@ -254,6 +259,8 @@ const TOGGLE_PENDING_TIMEOUT_MS = 3000;
 let lastRuntimeStatus: RuntimeStatus | null = null;
 let togglePendingAction: 'starting' | 'stopping' | null = null;
 let togglePendingTimeoutId: number | null = null;
+let customHotkeyConflicts: Record<string, HotkeyConflictInfo> = {};
+let effectiveHotkeyConflicts: Record<string, HotkeyConflictInfo> = { ...DEFAULT_HOTKEY_CONFLICTS };
 
 function setActiveTab(targetTab: WorkspaceTab, focusTab = false): void {
   activeTab = targetTab;
@@ -467,9 +474,199 @@ function validateHotkey(hotkey: string): string | null {
   return null;
 }
 
+function normalizeConflictReason(reason: string, hotkey: string): string {
+  const trimmedReason = reason.trim();
+  if (trimmedReason) return trimmedReason;
+  return `Custom fallback mapping for ${hotkey}.`;
+}
+
+function sanitizeCustomHotkeyConflicts(
+  input: unknown
+): { normalized: Record<string, HotkeyConflictInfo>; removedCount: number } {
+  const normalized: Record<string, HotkeyConflictInfo> = {};
+  let removedCount = 0;
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    return { normalized, removedCount };
+  }
+
+  for (const [requestedRaw, entry] of Object.entries(input as Record<string, unknown>)) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      removedCount += 1;
+      continue;
+    }
+
+    const fallbackRaw = (entry as { fallback?: unknown }).fallback;
+    if (typeof fallbackRaw !== 'string') {
+      removedCount += 1;
+      continue;
+    }
+
+    const requested = normalizeHotkeyInput(requestedRaw);
+    const fallback = normalizeHotkeyInput(fallbackRaw);
+    if (!requested || !fallback || validateHotkey(requested) || validateHotkey(fallback)) {
+      removedCount += 1;
+      continue;
+    }
+
+    const reasonRaw = (entry as { reason?: unknown }).reason;
+    const reason = typeof reasonRaw === 'string' ? normalizeConflictReason(reasonRaw, requested) : normalizeConflictReason('', requested);
+    normalized[requested] = {
+      reason,
+      fallback
+    };
+  }
+
+  return { normalized, removedCount };
+}
+
+function refreshEffectiveHotkeyConflicts(): void {
+  effectiveHotkeyConflicts = {
+    ...DEFAULT_HOTKEY_CONFLICTS,
+    ...customHotkeyConflicts
+  };
+}
+
+function loadCustomHotkeyConflicts(): void {
+  const persisted = localStorage.getItem(HOTKEY_CUSTOM_CONFLICTS_KEY);
+  if (!persisted) {
+    customHotkeyConflicts = {};
+    refreshEffectiveHotkeyConflicts();
+    return;
+  }
+
+  try {
+    const parsed = JSON.parse(persisted) as unknown;
+    const { normalized, removedCount } = sanitizeCustomHotkeyConflicts(parsed);
+    customHotkeyConflicts = normalized;
+    refreshEffectiveHotkeyConflicts();
+    if (removedCount > 0) {
+      localStorage.setItem(HOTKEY_CUSTOM_CONFLICTS_KEY, JSON.stringify(customHotkeyConflicts));
+    }
+  } catch {
+    customHotkeyConflicts = {};
+    refreshEffectiveHotkeyConflicts();
+    localStorage.removeItem(HOTKEY_CUSTOM_CONFLICTS_KEY);
+  }
+}
+
+function persistCustomHotkeyConflicts(): void {
+  if (Object.keys(customHotkeyConflicts).length === 0) {
+    localStorage.removeItem(HOTKEY_CUSTOM_CONFLICTS_KEY);
+    return;
+  }
+  localStorage.setItem(HOTKEY_CUSTOM_CONFLICTS_KEY, JSON.stringify(customHotkeyConflicts));
+}
+
+function formatCustomHotkeyConflictsForEditor(map: Record<string, HotkeyConflictInfo>): string {
+  const lines = Object.entries(map)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([requested, info]) => {
+      const defaultReason = normalizeConflictReason('', requested);
+      const reasonPart = info.reason.trim() === defaultReason ? '' : ` | ${info.reason.trim()}`;
+      return `${requested} => ${info.fallback}${reasonPart}`;
+    });
+  return lines.join('\n');
+}
+
+function parseCustomHotkeyConflictsEditorValue(
+  value: string
+): { conflicts: Record<string, HotkeyConflictInfo>; error: string | null } {
+  const conflicts: Record<string, HotkeyConflictInfo> = {};
+  const lines = value.split('\n');
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index].trim();
+    if (!line || line.startsWith('#')) continue;
+
+    const separatorIndex = line.indexOf('=>');
+    if (separatorIndex <= 0) {
+      return {
+        conflicts: {},
+        error: `Line ${index + 1} is invalid. Use "RequestedHotkey => FallbackHotkey | Optional reason".`
+      };
+    }
+
+    const requestedRaw = line.slice(0, separatorIndex).trim();
+    const rightSide = line.slice(separatorIndex + 2).trim();
+    if (!requestedRaw || !rightSide) {
+      return {
+        conflicts: {},
+        error: `Line ${index + 1} is missing a requested or fallback hotkey.`
+      };
+    }
+
+    const reasonSeparatorIndex = rightSide.indexOf('|');
+    const fallbackRaw = reasonSeparatorIndex >= 0 ? rightSide.slice(0, reasonSeparatorIndex).trim() : rightSide;
+    const reasonRaw = reasonSeparatorIndex >= 0 ? rightSide.slice(reasonSeparatorIndex + 1).trim() : '';
+    const requested = normalizeHotkeyInput(requestedRaw);
+    const fallback = normalizeHotkeyInput(fallbackRaw);
+    const requestedError = validateHotkey(requested);
+    const fallbackError = validateHotkey(fallback);
+    if (requestedError) {
+      return {
+        conflicts: {},
+        error: `Line ${index + 1} requested hotkey is invalid: ${requestedError}`
+      };
+    }
+    if (fallbackError) {
+      return {
+        conflicts: {},
+        error: `Line ${index + 1} fallback hotkey is invalid: ${fallbackError}`
+      };
+    }
+
+    conflicts[requested] = {
+      fallback,
+      reason: normalizeConflictReason(reasonRaw, requested)
+    };
+  }
+
+  return { conflicts, error: null };
+}
+
+function setHotkeyFallbackMappingsStatus(message: string, isError = false): void {
+  hotkeyFallbackMappingsStatusEl.textContent = message;
+  hotkeyFallbackMappingsStatusEl.classList.toggle('error', isError);
+}
+
+function applyHotkeyConflictMappings(conflicts: Record<string, HotkeyConflictInfo>): void {
+  customHotkeyConflicts = conflicts;
+  refreshEffectiveHotkeyConflicts();
+  hotkeyFallbackMappingsInput.value = formatCustomHotkeyConflictsForEditor(customHotkeyConflicts);
+  validateHotkeyInput();
+  validateOnboardingHotkeyInput();
+}
+
+function setupHotkeyFallbackMappingsEditor(): void {
+  loadCustomHotkeyConflicts();
+  hotkeyFallbackMappingsInput.value = formatCustomHotkeyConflictsForEditor(customHotkeyConflicts);
+  setHotkeyFallbackMappingsStatus('No custom fallback mappings saved yet.', false);
+
+  hotkeyFallbackMappingsSaveBtn.addEventListener('click', () => {
+    const parsed = parseCustomHotkeyConflictsEditorValue(hotkeyFallbackMappingsInput.value);
+    if (parsed.error) {
+      setHotkeyFallbackMappingsStatus(parsed.error, true);
+      return;
+    }
+    applyHotkeyConflictMappings(parsed.conflicts);
+    persistCustomHotkeyConflicts();
+    const count = Object.keys(parsed.conflicts).length;
+    setHotkeyFallbackMappingsStatus(
+      count > 0 ? `Saved ${count} custom fallback mapping${count === 1 ? '' : 's'}.` : 'Custom fallback mappings cleared.',
+      false
+    );
+  });
+
+  hotkeyFallbackMappingsResetBtn.addEventListener('click', () => {
+    applyHotkeyConflictMappings({});
+    persistCustomHotkeyConflicts();
+    setHotkeyFallbackMappingsStatus('Reset custom mappings. Default fallback mappings are active.', false);
+  });
+}
+
 function getHotkeyConflictInfo(hotkey: string): HotkeyConflictInfo | null {
   const normalized = normalizeHotkeyInput(hotkey);
-  return HOTKEY_CONFLICTS[normalized] ?? null;
+  return effectiveHotkeyConflicts[normalized] ?? null;
 }
 
 function setHotkeySuggestion(button: HTMLButtonElement, conflictInfo: HotkeyConflictInfo | null): void {
@@ -1450,6 +1647,7 @@ listen<RuntimeStatus>('runtime-status', (event) => {
 setupTabs();
 setupSidebar();
 setupHotkeyCapture();
+setupHotkeyFallbackMappingsEditor();
 
 loadInitial().catch((error) => {
   statusEl.textContent = `Initialization failed: ${String(error)}`;
