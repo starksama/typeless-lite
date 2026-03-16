@@ -133,6 +133,11 @@
               </label>
               <button id="history-clear-btn" class="ghost-btn" type="button">Clear history</button>
             </div>
+            <div class="history-performance-summary" aria-live="polite">
+              <p><span class="history-performance-label">Filtered results</span> <strong id="history-summary-count">0</strong></p>
+              <p><span class="history-performance-label">Median latency</span> <strong id="history-summary-median">n/a</strong></p>
+              <p><span class="history-performance-label">Slow runs (>= 4000ms)</span> <strong id="history-summary-slow">0%</strong></p>
+            </div>
             <div class="history-layout">
               <section class="history-list-wrap">
                 <p id="history-empty" class="hint">No transcript history yet.</p>

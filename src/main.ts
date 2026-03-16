@@ -140,6 +140,9 @@ const historyFilterModeInput = document.querySelector<HTMLSelectElement>('#histo
 const historyFilterLanguageInput = document.querySelector<HTMLSelectElement>('#history-filter-language')!;
 const historyFilterDateInput = document.querySelector<HTMLSelectElement>('#history-filter-date')!;
 const historyClearBtn = document.querySelector<HTMLButtonElement>('#history-clear-btn')!;
+const historySummaryCountEl = document.querySelector<HTMLElement>('#history-summary-count')!;
+const historySummaryMedianEl = document.querySelector<HTMLElement>('#history-summary-median')!;
+const historySummarySlowEl = document.querySelector<HTMLElement>('#history-summary-slow')!;
 const historyDetailMetaEl = document.querySelector<HTMLParagraphElement>('#history-detail-meta')!;
 const historyDetailTextEl = document.querySelector<HTMLPreElement>('#history-detail-text')!;
 const historyCopyBtn = document.querySelector<HTMLButtonElement>('#history-copy-btn')!;
@@ -521,6 +524,18 @@ function formatLatency(latencyMs?: number | null): string {
   return `${Math.round(latencyMs)}ms`;
 }
 
+function formatPercentage(value: number): string {
+  return `${Math.round(value)}%`;
+}
+
+function computeMedian(values: number[]): number | null {
+  if (values.length === 0) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  if (sorted.length % 2 === 1) return sorted[mid];
+  return (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
 function getLatestHistoryEntry(): TranscriptHistoryEntry | null {
   if (historyEntries.length === 0) return null;
   return [...historyEntries].sort((a, b) => b.created_at_ms - a.created_at_ms)[0];
@@ -601,9 +616,24 @@ function renderHistoryDetail(entry: TranscriptHistoryEntry | null): void {
   historyDetailTextEl.textContent = entry.final_output;
 }
 
+function renderHistoryPerformanceSummary(entries: TranscriptHistoryEntry[]): void {
+  historySummaryCountEl.textContent = String(entries.length);
+
+  const latencies = entries
+    .map((entry) => entry.processing_latency_ms)
+    .filter((latencyMs): latencyMs is number => latencyMs != null && latencyMs >= 0);
+  const medianLatency = computeMedian(latencies);
+  historySummaryMedianEl.textContent = formatLatency(medianLatency);
+
+  const slowRuns = entries.filter((entry) => (entry.processing_latency_ms ?? -1) >= 4000).length;
+  const slowPercentage = entries.length === 0 ? 0 : (slowRuns / entries.length) * 100;
+  historySummarySlowEl.textContent = formatPercentage(slowPercentage);
+}
+
 function renderHistory(entries: TranscriptHistoryEntry[]): void {
   historyEntries = [...entries].sort((a, b) => b.created_at_ms - a.created_at_ms);
   const filteredEntries = getFilteredHistoryEntries();
+  renderHistoryPerformanceSummary(filteredEntries);
 
   if (historySelectedEntryId && !filteredEntries.some((entry) => entry.id === historySelectedEntryId)) {
     historySelectedEntryId = null;
