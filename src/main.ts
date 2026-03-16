@@ -39,6 +39,11 @@ const toggleBtn = document.querySelector<HTMLButtonElement>('#toggle-btn')!;
 const testApiBtn = document.querySelector<HTMLButtonElement>('#test-api-btn')!;
 const checkAccessibilityBtn = document.querySelector<HTMLButtonElement>('#check-accessibility-btn')!;
 const openAccessibilitySettingsBtn = document.querySelector<HTMLButtonElement>('#open-accessibility-settings-btn')!;
+const accessibilityModalEl = document.querySelector<HTMLDivElement>('#accessibility-modal')!;
+const accessibilityModalOpenSettingsBtn = document.querySelector<HTMLButtonElement>(
+  '#accessibility-modal-open-settings-btn'
+)!;
+const accessibilityModalLaterBtn = document.querySelector<HTMLButtonElement>('#accessibility-modal-later-btn')!;
 const apiKeyInput = document.querySelector<HTMLInputElement>('#apiKey')!;
 const promptTemplateInput = document.querySelector<HTMLTextAreaElement>('#promptTemplate')!;
 const hotkeyInput = document.querySelector<HTMLInputElement>('#hotkey')!;
@@ -74,9 +79,36 @@ function renderAccessibilityStatus(status: AccessibilityPermissionStatus): void 
   accessibilityStatusEl.textContent = `[${label}] ${status.guidance}`;
 }
 
-async function checkAndRenderAccessibilityStatus(): Promise<void> {
+function showAccessibilityModal(): void {
+  accessibilityModalEl.classList.remove('hidden');
+}
+
+function hideAccessibilityModal(): void {
+  accessibilityModalEl.classList.add('hidden');
+}
+
+function shouldPromptForAccessibility(status: AccessibilityPermissionStatus): boolean {
+  return status.is_supported && !status.is_granted;
+}
+
+async function checkAndRenderAccessibilityStatus(): Promise<AccessibilityPermissionStatus> {
   const permissionStatus = await invoke<AccessibilityPermissionStatus>('check_accessibility_permission');
   renderAccessibilityStatus(permissionStatus);
+  return permissionStatus;
+}
+
+async function openAccessibilitySettingsFromUi(
+  button: HTMLButtonElement
+): Promise<void> {
+  button.disabled = true;
+  try {
+    const message = await invoke<string>('open_accessibility_settings');
+    accessibilityStatusEl.textContent = message;
+  } catch (error) {
+    accessibilityStatusEl.textContent = `Failed to open settings: ${String(error)}`;
+  } finally {
+    button.disabled = false;
+  }
 }
 
 async function loadInitial(): Promise<void> {
@@ -97,7 +129,10 @@ async function loadInitial(): Promise<void> {
 
   accessibilityStatusEl.textContent = 'Checking Accessibility permission...';
   try {
-    await checkAndRenderAccessibilityStatus();
+    const permissionStatus = await checkAndRenderAccessibilityStatus();
+    if (shouldPromptForAccessibility(permissionStatus)) {
+      showAccessibilityModal();
+    }
   } catch (error) {
     accessibilityStatusEl.textContent = `Accessibility check failed: ${String(error)}`;
   }
@@ -160,15 +195,16 @@ checkAccessibilityBtn.addEventListener('click', async () => {
 });
 
 openAccessibilitySettingsBtn.addEventListener('click', async () => {
-  openAccessibilitySettingsBtn.disabled = true;
-  try {
-    const message = await invoke<string>('open_accessibility_settings');
-    accessibilityStatusEl.textContent = message;
-  } catch (error) {
-    accessibilityStatusEl.textContent = `Failed to open settings: ${String(error)}`;
-  } finally {
-    openAccessibilitySettingsBtn.disabled = false;
-  }
+  await openAccessibilitySettingsFromUi(openAccessibilitySettingsBtn);
+});
+
+accessibilityModalOpenSettingsBtn.addEventListener('click', async () => {
+  hideAccessibilityModal();
+  await openAccessibilitySettingsFromUi(accessibilityModalOpenSettingsBtn);
+});
+
+accessibilityModalLaterBtn.addEventListener('click', () => {
+  hideAccessibilityModal();
 });
 
 listen<RuntimeStatus>('runtime-status', (event) => {
