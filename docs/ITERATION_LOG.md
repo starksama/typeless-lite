@@ -1,5 +1,16 @@
 # Iteration Log
 
+## 2026-03-16T09:08:13Z
+- Area worked: hotkey UX
+- User value: Prevents saving likely-conflicting shortcuts by warning early and offering one-click fallback presets in both Settings and onboarding.
+- Files changed:
+  - `src/main.ts`
+  - `index.html`
+  - `docs/ITERATION_LOG.md`
+  - `docs/NEXT_ITERATION.md`
+- Validation result:
+  - `yarn build` (pass)
+
 ## 2026-03-16T08:07:41Z
 - Area worked: reliability
 - User value: Prevents transcript history selection glitches caused by duplicate entry IDs when multiple transcripts are created within the same millisecond.
