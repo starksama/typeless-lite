@@ -50,7 +50,22 @@
                 <strong id="summary-language">Auto</strong>
               </div>
             </div>
-            <p class="hint">Jump to Dictation to start/stop recording, and use Settings to tune models, hotkeys, and permissions.</p>
+            <div class="buttons">
+              <button id="home-toggle-btn" type="button">Start / Stop</button>
+              <button id="home-copy-last-btn" class="ghost-btn" type="button" disabled>Copy last transcript</button>
+              <button id="home-open-last-btn" class="ghost-btn" type="button" disabled>Open last output</button>
+            </div>
+            <div class="chips" aria-label="Shortcut hints">
+              <span class="chip">Shortcut: <strong id="shortcut-primary-hint">Cmd+Shift+Space</strong></span>
+              <span class="chip">Mode hint: <strong id="shortcut-mode-hint">Hold to record</strong></span>
+              <span class="chip">Press <strong>Tab</strong> to move across controls</span>
+            </div>
+            <div class="home-last-output">
+              <p class="summary-label">Last output preview</p>
+              <pre id="home-last-output-preview">No recent transcript yet.</pre>
+              <p id="home-last-output-meta" class="hint">No history metadata yet.</p>
+            </div>
+            <p class="hint">Use quick actions to reduce clicks; full details and reuse controls are available in the History tab.</p>
           </section>
         </section>
 
@@ -77,13 +92,64 @@
           <section class="card">
             <div class="card-head">
               <h2>History</h2>
-              <p class="subtle">Last 20 inserted transcripts are stored locally for quick recovery.</p>
+              <p class="subtle">Search, inspect, and reuse previous dictation outputs.</p>
             </div>
-            <div class="buttons">
-              <button id="clear-history-btn" type="button">Clear history</button>
+            <div class="history-toolbar">
+              <label>
+                Search
+                <input id="history-search" type="search" placeholder="Search transcript text, source app, or language" />
+              </label>
+              <label>
+                Mode
+                <select id="history-filter-mode">
+                  <option value="all">All modes</option>
+                  <option value="hold">Hold</option>
+                  <option value="toggle">Toggle</option>
+                </select>
+              </label>
+              <label>
+                Language
+                <select id="history-filter-language">
+                  <option value="all">All languages</option>
+                  <option value="auto">Auto</option>
+                  <option value="en">English (en)</option>
+                  <option value="zh">Chinese Simplified (zh)</option>
+                  <option value="zh-TW">Chinese Traditional (zh-TW)</option>
+                  <option value="ja">Japanese (ja)</option>
+                  <option value="ko">Korean (ko)</option>
+                  <option value="es">Spanish (es)</option>
+                  <option value="fr">French (fr)</option>
+                  <option value="de">German (de)</option>
+                </select>
+              </label>
+              <label>
+                Date
+                <select id="history-filter-date">
+                  <option value="all">All time</option>
+                  <option value="today">Today</option>
+                  <option value="7d">Last 7 days</option>
+                  <option value="30d">Last 30 days</option>
+                </select>
+              </label>
+              <button id="history-clear-btn" class="ghost-btn" type="button">Clear history</button>
             </div>
-            <ul id="history-list" class="history-list" aria-live="polite"></ul>
-            <p id="history-empty" class="hint">No transcripts yet. Start dictation and your entries will appear here.</p>
+            <div class="history-layout">
+              <section class="history-list-wrap">
+                <p id="history-empty" class="hint">No transcript history yet.</p>
+                <ul id="history-list" class="history-list" aria-live="polite"></ul>
+              </section>
+              <section class="history-detail">
+                <div class="section-head">
+                  <h3>Details</h3>
+                  <div class="buttons">
+                    <button id="history-copy-btn" type="button" class="ghost-btn" disabled>Copy</button>
+                    <button id="history-reuse-btn" type="button" class="ghost-btn" disabled>Reuse in Home status</button>
+                  </div>
+                </div>
+                <p id="history-detail-meta" class="hint">Select an entry from the list.</p>
+                <pre id="history-detail-text" class="history-detail-text">No transcript selected.</pre>
+              </section>
+            </div>
           </section>
         </section>
 

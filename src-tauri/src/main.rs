@@ -32,7 +32,7 @@ const TERMINAL_TYPE_CHUNK_SIZE: usize = 80;
 const MIN_RECORDING_MS: u128 = 400;
 const API_TEST_TIMEOUT_SECS: u64 = 6;
 const API_CLIENT_TIMEOUT_SECS: u64 = 30;
-const TRANSCRIPT_HISTORY_LIMIT: usize = 20;
+const TRANSCRIPT_HISTORY_LIMIT: usize = 500;
 const TRANSCRIPT_HISTORY_EVENT: &str = "transcript-history-updated";
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -145,8 +145,30 @@ fn play_earcon(_earcon: Earcon) {}
 struct TranscriptHistoryEntry {
     id: u64,
     created_at_ms: u64,
-    text: String,
+    #[serde(alias = "text")]
+    final_output: String,
+    #[serde(default = "default_history_recording_mode")]
+    recording_mode: String,
+    #[serde(default = "default_history_language")]
+    language: String,
+    #[serde(default)]
+    source_app: Option<String>,
+    #[serde(default = "default_history_source")]
     source: String,
+    #[serde(default)]
+    processing_latency_ms: Option<u64>,
+}
+
+fn default_history_recording_mode() -> String {
+    "hold".to_string()
+}
+
+fn default_history_language() -> String {
+    "auto".to_string()
+}
+
+fn default_history_source() -> String {
+    "dictation".to_string()
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -591,10 +613,14 @@ fn emit_transcript_history(app: &AppHandle, state: &State<'_, AppState>) {
 fn push_transcript_history_entry(
     app: &AppHandle,
     state: &State<'_, AppState>,
-    text: &str,
+    final_output: &str,
     source: &str,
+    recording_mode: &str,
+    language: &str,
+    source_app: Option<&str>,
+    processing_latency_ms: Option<u64>,
 ) {
-    let trimmed = text.trim();
+    let trimmed = final_output.trim();
     if trimmed.is_empty() {
         return;
     }
@@ -613,8 +639,12 @@ fn push_transcript_history_entry(
             TranscriptHistoryEntry {
                 id: now_ms,
                 created_at_ms: now_ms,
-                text: trimmed.to_string(),
+                final_output: trimmed.to_string(),
+                recording_mode: normalize_recording_mode(recording_mode),
+                language: normalize_transcription_language(language),
+                source_app: source_app.map(|value| value.to_string()),
                 source: source.to_string(),
+                processing_latency_ms,
             },
         );
         entries.truncate(TRANSCRIPT_HISTORY_LIMIT);
@@ -842,9 +872,13 @@ fn toggle_recording_inner(app: &AppHandle, state: &State<AppState>) -> Result<()
         );
 
         let app_handle = app.clone();
+        let processing_started_at = Instant::now();
         tauri::async_runtime::spawn(async move {
             let app_state: State<AppState> = app_handle.state();
-            if let Err(err) = process_audio_pipeline(&app_handle, &app_state, wav_path).await {
+            if let Err(err) =
+                process_audio_pipeline(&app_handle, &app_state, wav_path, processing_started_at)
+                    .await
+            {
                 set_status(
                     &app_handle,
                     &app_state,
@@ -1029,6 +1063,7 @@ async fn process_audio_pipeline(
     app: &AppHandle,
     state: &State<'_, AppState>,
     wav_path: PathBuf,
+    processing_started_at: Instant,
 ) -> Result<(), AppError> {
     let pipeline_result = async {
         let settings = state
@@ -1095,7 +1130,13 @@ async fn process_audio_pipeline(
         };
         paste_text(&output_text)?;
 
-        Ok::<(String, String), AppError>((inserted_message, output_text))
+        Ok::<(String, String, Option<String>, String, String), AppError>((
+            inserted_message,
+            output_text,
+            active_app_name,
+            settings.recording_mode.clone(),
+            settings.language.clone(),
+        ))
     };
     let result = pipeline_result.await;
     if let Err(cleanup_error) = fs::remove_file(&wav_path) {
@@ -1108,8 +1149,18 @@ async fn process_audio_pipeline(
         }
     }
 
-    let (inserted_message, output_text) = result?;
-    push_transcript_history_entry(app, state, &output_text, "dictation");
+    let latency_ms = processing_started_at.elapsed().as_millis() as u64;
+    let (inserted_message, output_text, source_app, recording_mode, language) = result?;
+    push_transcript_history_entry(
+        app,
+        state,
+        &output_text,
+        "dictation",
+        &recording_mode,
+        &language,
+        source_app.as_deref(),
+        Some(latency_ms),
+    );
 
     set_status(
         app,
@@ -1117,7 +1168,7 @@ async fn process_audio_pipeline(
         Some(false),
         Some(false),
         Some(0),
-        inserted_message,
+        format!("{inserted_message} {latency_ms}ms"),
     );
     play_earcon_if_enabled(state, Earcon::Success);
 

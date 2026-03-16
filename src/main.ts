@@ -39,8 +39,12 @@ type AccessibilityPermissionStatus = {
 type TranscriptHistoryEntry = {
   id: number;
   created_at_ms: number;
-  text: string;
+  final_output: string;
+  recording_mode: RecordingMode;
+  language: TranscriptionLanguage;
+  source_app?: string | null;
   source: string;
+  processing_latency_ms?: number | null;
 };
 
 type WorkspaceTab = 'home' | 'dictation' | 'history' | 'settings';
@@ -95,11 +99,26 @@ const activeStateChipEl = document.querySelector<HTMLSpanElement>('#active-state
 const summaryHotkeyEl = document.querySelector<HTMLSpanElement>('#summary-hotkey')!;
 const summaryModeEl = document.querySelector<HTMLSpanElement>('#summary-mode')!;
 const summaryLanguageEl = document.querySelector<HTMLSpanElement>('#summary-language')!;
+const homeToggleBtn = document.querySelector<HTMLButtonElement>('#home-toggle-btn')!;
+const homeCopyLastBtn = document.querySelector<HTMLButtonElement>('#home-copy-last-btn')!;
+const homeOpenLastBtn = document.querySelector<HTMLButtonElement>('#home-open-last-btn')!;
+const shortcutPrimaryHintEl = document.querySelector<HTMLSpanElement>('#shortcut-primary-hint')!;
+const shortcutModeHintEl = document.querySelector<HTMLSpanElement>('#shortcut-mode-hint')!;
+const homeLastOutputPreviewEl = document.querySelector<HTMLPreElement>('#home-last-output-preview')!;
+const homeLastOutputMetaEl = document.querySelector<HTMLParagraphElement>('#home-last-output-meta')!;
 const tabButtons = document.querySelectorAll<HTMLButtonElement>('[data-tab-target]');
 const tabPanels = document.querySelectorAll<HTMLElement>('[data-tab-panel]');
 const historyListEl = document.querySelector<HTMLUListElement>('#history-list')!;
 const historyEmptyEl = document.querySelector<HTMLParagraphElement>('#history-empty')!;
-const clearHistoryBtn = document.querySelector<HTMLButtonElement>('#clear-history-btn')!;
+const historySearchInput = document.querySelector<HTMLInputElement>('#history-search')!;
+const historyFilterModeInput = document.querySelector<HTMLSelectElement>('#history-filter-mode')!;
+const historyFilterLanguageInput = document.querySelector<HTMLSelectElement>('#history-filter-language')!;
+const historyFilterDateInput = document.querySelector<HTMLSelectElement>('#history-filter-date')!;
+const historyClearBtn = document.querySelector<HTMLButtonElement>('#history-clear-btn')!;
+const historyDetailMetaEl = document.querySelector<HTMLParagraphElement>('#history-detail-meta')!;
+const historyDetailTextEl = document.querySelector<HTMLPreElement>('#history-detail-text')!;
+const historyCopyBtn = document.querySelector<HTMLButtonElement>('#history-copy-btn')!;
+const historyReuseBtn = document.querySelector<HTMLButtonElement>('#history-reuse-btn')!;
 const reopenOnboardingBtn = document.querySelector<HTMLButtonElement>('#reopen-onboarding-btn')!;
 const onboardingModalEl = document.querySelector<HTMLDivElement>('#onboarding-modal')!;
 const onboardingStepIndicatorEl = document.querySelector<HTMLParagraphElement>('#onboarding-step-indicator')!;
@@ -134,6 +153,8 @@ let activeTab: WorkspaceTab = 'home';
 const ONBOARDING_COMPLETED_KEY = 'typeless:onboarding-complete:v1';
 const onboardingStepOrder: OnboardingStepId[] = ['welcome', 'permissions', 'api', 'quick-setup', 'finish'];
 let onboardingStepIndex = 0;
+let historyEntries: TranscriptHistoryEntry[] = [];
+let historySelectedEntryId: number | null = null;
 
 function setActiveTab(targetTab: WorkspaceTab, focusTab = false): void {
   activeTab = targetTab;
@@ -300,6 +321,8 @@ function applyConfigUi(config: Pick<Settings, 'hotkey' | 'recording_mode' | 'lan
   summaryHotkeyEl.textContent = activeConfig.hotkey;
   summaryModeEl.textContent = modeLabel;
   summaryLanguageEl.textContent = languageText;
+  shortcutPrimaryHintEl.textContent = activeConfig.hotkey;
+  shortcutModeHintEl.textContent = modeLabel;
 
   modeStatusTextEl.textContent =
     activeConfig.recording_mode === 'toggle'
@@ -431,13 +454,111 @@ function formatHistoryTimestamp(timestampMs: number): string {
   return new Date(timestampMs).toLocaleString();
 }
 
-function renderHistory(entries: TranscriptHistoryEntry[]): void {
-  historyListEl.innerHTML = '';
-  historyEmptyEl.hidden = entries.length > 0;
+function formatLatency(latencyMs?: number | null): string {
+  if (latencyMs == null || latencyMs < 0) return 'n/a';
+  return `${Math.round(latencyMs)}ms`;
+}
 
-  for (const entry of entries) {
+function getLatestHistoryEntry(): TranscriptHistoryEntry | null {
+  if (historyEntries.length === 0) return null;
+  return [...historyEntries].sort((a, b) => b.created_at_ms - a.created_at_ms)[0];
+}
+
+function refreshHomeLastOutputPreview(): void {
+  const latestEntry = getLatestHistoryEntry();
+  const hasEntry = Boolean(latestEntry);
+  homeCopyLastBtn.disabled = !hasEntry;
+  homeOpenLastBtn.disabled = !hasEntry;
+  if (!latestEntry) {
+    homeLastOutputPreviewEl.textContent = 'No recent transcript yet.';
+    homeLastOutputMetaEl.textContent = 'No history metadata yet.';
+    return;
+  }
+
+  const preview = latestEntry.final_output.trim();
+  homeLastOutputPreviewEl.textContent =
+    preview.length > 280 ? `${preview.slice(0, 280).trimEnd()}...` : preview;
+  homeLastOutputMetaEl.textContent = `${formatHistoryTimestamp(latestEntry.created_at_ms)} | ${
+    latestEntry.source_app || 'Unknown app'
+  } | ${formatLatency(latestEntry.processing_latency_ms)}`;
+}
+
+function historyDateFilterMatch(entry: TranscriptHistoryEntry, filter: string): boolean {
+  if (filter === 'all') return true;
+  const now = Date.now();
+  const ageMs = now - entry.created_at_ms;
+  if (filter === 'today') {
+    const today = new Date();
+    const entryDate = new Date(entry.created_at_ms);
+    return (
+      today.getFullYear() === entryDate.getFullYear() &&
+      today.getMonth() === entryDate.getMonth() &&
+      today.getDate() === entryDate.getDate()
+    );
+  }
+  if (filter === '7d') return ageMs <= 7 * 24 * 60 * 60 * 1000;
+  if (filter === '30d') return ageMs <= 30 * 24 * 60 * 60 * 1000;
+  return true;
+}
+
+function getFilteredHistoryEntries(): TranscriptHistoryEntry[] {
+  const search = historySearchInput.value.trim().toLowerCase();
+  const modeFilter = historyFilterModeInput.value;
+  const languageFilter = historyFilterLanguageInput.value;
+  const dateFilter = historyFilterDateInput.value;
+
+  return historyEntries.filter((entry) => {
+    const matchesMode = modeFilter === 'all' || entry.recording_mode === modeFilter;
+    const matchesLanguage = languageFilter === 'all' || entry.language === languageFilter;
+    const matchesDate = historyDateFilterMatch(entry, dateFilter);
+    if (!matchesMode || !matchesLanguage || !matchesDate) return false;
+    if (!search) return true;
+
+    const searchable = `${entry.final_output} ${entry.language} ${entry.recording_mode} ${
+      entry.source_app || ''
+    } ${entry.source}`.toLowerCase();
+    return searchable.includes(search);
+  });
+}
+
+function renderHistoryDetail(entry: TranscriptHistoryEntry | null): void {
+  const hasEntry = Boolean(entry);
+  historyCopyBtn.disabled = !hasEntry;
+  historyReuseBtn.disabled = !hasEntry;
+
+  if (!entry) {
+    historyDetailMetaEl.textContent = 'Select an entry from the list.';
+    historyDetailTextEl.textContent = 'No transcript selected.';
+    return;
+  }
+
+  const sourceApp = entry.source_app?.trim() ? entry.source_app : 'Unknown app';
+  historyDetailMetaEl.textContent = `${formatHistoryTimestamp(entry.created_at_ms)} | ${recordingModeLabel(
+    entry.recording_mode
+  )} | ${languageLabel(entry.language)} | ${sourceApp} | ${formatLatency(entry.processing_latency_ms)}`;
+  historyDetailTextEl.textContent = entry.final_output;
+}
+
+function renderHistory(entries: TranscriptHistoryEntry[]): void {
+  historyEntries = [...entries].sort((a, b) => b.created_at_ms - a.created_at_ms);
+  const filteredEntries = getFilteredHistoryEntries();
+
+  if (historySelectedEntryId && !filteredEntries.some((entry) => entry.id === historySelectedEntryId)) {
+    historySelectedEntryId = null;
+  }
+
+  historyListEl.innerHTML = '';
+  historyEmptyEl.hidden = filteredEntries.length > 0;
+
+  for (const entry of filteredEntries) {
     const li = document.createElement('li');
     li.className = 'history-item';
+    li.tabIndex = 0;
+    li.setAttribute('role', 'button');
+    li.setAttribute('aria-label', `History entry from ${formatHistoryTimestamp(entry.created_at_ms)}`);
+    if (entry.id === historySelectedEntryId) {
+      li.classList.add('is-active');
+    }
 
     const meta = document.createElement('div');
     meta.className = 'history-item-meta';
@@ -446,26 +567,33 @@ function renderHistory(entries: TranscriptHistoryEntry[]): void {
     time.textContent = formatHistoryTimestamp(entry.created_at_ms);
     meta.appendChild(time);
 
-    const copyBtn = document.createElement('button');
-    copyBtn.type = 'button';
-    copyBtn.textContent = 'Copy';
-    copyBtn.addEventListener('click', async () => {
-      try {
-        await invoke('copy_text_to_clipboard', { text: entry.text });
-        statusEl.textContent = 'Copied transcript to clipboard.';
-      } catch (error) {
-        statusEl.textContent = `Copy failed: ${String(error)}`;
-      }
-    });
-    meta.appendChild(copyBtn);
+    const info = document.createElement('span');
+    info.textContent = `${recordingModeLabel(entry.recording_mode)} | ${languageLabel(entry.language)} | ${
+      entry.source_app || 'Unknown app'
+    } | ${formatLatency(entry.processing_latency_ms)}`;
+    meta.appendChild(info);
 
     const text = document.createElement('p');
     text.className = 'history-item-text';
-    text.textContent = entry.text;
+    text.textContent = entry.final_output;
 
     li.append(meta, text);
+    li.addEventListener('click', () => {
+      historySelectedEntryId = entry.id;
+      renderHistory(historyEntries);
+    });
+    li.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      historySelectedEntryId = entry.id;
+      renderHistory(historyEntries);
+    });
     historyListEl.appendChild(li);
   }
+
+  const selectedEntry = filteredEntries.find((entry) => entry.id === historySelectedEntryId) || null;
+  renderHistoryDetail(selectedEntry);
+  refreshHomeLastOutputPreview();
 }
 
 async function loadHistory(): Promise<void> {
@@ -567,6 +695,36 @@ toggleBtn.addEventListener('click', async () => {
   } catch (error) {
     statusEl.textContent = `Toggle failed: ${String(error)}`;
   }
+});
+
+homeToggleBtn.addEventListener('click', async () => {
+  try {
+    await invoke('toggle_recording');
+  } catch (error) {
+    statusEl.textContent = `Toggle failed: ${String(error)}`;
+  }
+});
+
+homeCopyLastBtn.addEventListener('click', async () => {
+  const latestEntry = getLatestHistoryEntry();
+  if (!latestEntry) return;
+  homeCopyLastBtn.disabled = true;
+  try {
+    await invoke('copy_text_to_clipboard', { text: latestEntry.final_output });
+    statusEl.textContent = 'Copied last transcript to clipboard.';
+  } catch (error) {
+    statusEl.textContent = `Copy failed: ${String(error)}`;
+  } finally {
+    homeCopyLastBtn.disabled = false;
+  }
+});
+
+homeOpenLastBtn.addEventListener('click', () => {
+  const latestEntry = getLatestHistoryEntry();
+  if (!latestEntry) return;
+  historySelectedEntryId = latestEntry.id;
+  renderHistory(historyEntries);
+  setActiveTab('history');
 });
 
 testApiBtn.addEventListener('click', async () => {
@@ -676,16 +834,46 @@ onboardingOpenAccessibilitySettingsBtn.addEventListener('click', async () => {
   }
 });
 
-clearHistoryBtn.addEventListener('click', async () => {
-  clearHistoryBtn.disabled = true;
+historyCopyBtn.addEventListener('click', async () => {
+  const entry = historyEntries.find((item) => item.id === historySelectedEntryId);
+  if (!entry) return;
+  historyCopyBtn.disabled = true;
+  try {
+    await invoke('copy_text_to_clipboard', { text: entry.final_output });
+    statusEl.textContent = 'Copied transcript to clipboard.';
+  } catch (error) {
+    statusEl.textContent = `Copy failed: ${String(error)}`;
+  } finally {
+    historyCopyBtn.disabled = false;
+  }
+});
+
+historyReuseBtn.addEventListener('click', () => {
+  const entry = historyEntries.find((item) => item.id === historySelectedEntryId);
+  if (!entry) return;
+  statusEl.textContent = entry.final_output;
+  setActiveTab('home');
+});
+
+const rerenderHistory = () => renderHistory(historyEntries);
+historySearchInput.addEventListener('input', rerenderHistory);
+historyFilterModeInput.addEventListener('change', rerenderHistory);
+historyFilterLanguageInput.addEventListener('change', rerenderHistory);
+historyFilterDateInput.addEventListener('change', rerenderHistory);
+
+historyClearBtn.addEventListener('click', async () => {
+  const shouldClear = window.confirm('Clear all transcript history? This cannot be undone.');
+  if (!shouldClear) return;
+  historyClearBtn.disabled = true;
   try {
     await invoke('clear_transcript_history');
+    historySelectedEntryId = null;
     renderHistory([]);
     statusEl.textContent = 'Transcript history cleared.';
   } catch (error) {
     statusEl.textContent = `Failed to clear history: ${String(error)}`;
   } finally {
-    clearHistoryBtn.disabled = false;
+    historyClearBtn.disabled = false;
   }
 });
 
