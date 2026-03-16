@@ -219,6 +219,12 @@ const onboardingBackBtn = document.querySelector<HTMLButtonElement>('#onboarding
 const onboardingNextBtn = document.querySelector<HTMLButtonElement>('#onboarding-next-btn')!;
 const onboardingFinishBtn = document.querySelector<HTMLButtonElement>('#onboarding-finish-btn')!;
 const onboardingApiKeyInput = document.querySelector<HTMLInputElement>('#onboarding-api-key')!;
+const onboardingApiBaseUrlInput = document.querySelector<HTMLInputElement>('#onboarding-api-base-url')!;
+const onboardingApiKeyValidationEl = document.querySelector<HTMLParagraphElement>('#onboarding-api-key-validation')!;
+const onboardingApiBaseUrlValidationEl = document.querySelector<HTMLParagraphElement>(
+  '#onboarding-api-base-url-validation'
+)!;
+const onboardingApiBaseUrlFixBtn = document.querySelector<HTMLButtonElement>('#onboarding-api-base-url-fix-btn')!;
 const onboardingRecordingModeInput = document.querySelector<HTMLSelectElement>('#onboarding-recording-mode')!;
 const onboardingHotkeyInput = document.querySelector<HTMLInputElement>('#onboarding-hotkey')!;
 const onboardingHotkeyCaptureBtn = document.querySelector<HTMLButtonElement>('#onboarding-hotkey-capture-btn')!;
@@ -338,9 +344,11 @@ function setOnboardingCompleted(value: boolean): void {
 
 function syncOnboardingInputsFromSettings(): void {
   onboardingApiKeyInput.value = apiKeyInput.value.trim();
+  onboardingApiBaseUrlInput.value = apiBaseUrlInput.value.trim() || 'https://api.openai.com/v1';
   onboardingRecordingModeInput.value = normalizeMode(recordingModeInput.value);
   onboardingHotkeyInput.value = normalizeHotkeyInput(hotkeyInput.value) || 'Cmd+Shift+Space';
   onboardingLanguageInput.value = normalizeLanguage(languageInput.value);
+  validateOnboardingApiStep();
   validateOnboardingHotkeyInput();
 }
 
@@ -397,6 +405,125 @@ function setHotkeyValidation(message: string, isError: boolean): void {
 function setOnboardingHotkeyValidation(message: string, isError: boolean): void {
   onboardingHotkeyValidationEl.textContent = message;
   onboardingHotkeyValidationEl.classList.toggle('error', isError);
+}
+
+function setOnboardingApiKeyValidation(message: string, isError: boolean): void {
+  onboardingApiKeyValidationEl.textContent = message;
+  onboardingApiKeyValidationEl.classList.toggle('error', isError);
+}
+
+function setOnboardingApiBaseUrlValidation(message: string, isError: boolean): void {
+  onboardingApiBaseUrlValidationEl.textContent = message;
+  onboardingApiBaseUrlValidationEl.classList.toggle('error', isError);
+}
+
+function normalizeApiBaseUrlInput(input: string): string {
+  const trimmed = input.trim();
+  if (!trimmed) return '';
+
+  const withProtocol = /^[a-zA-Z][a-zA-Z\d+\-.]*:\/\//.test(trimmed) ? trimmed : `https://${trimmed}`;
+  try {
+    const parsed = new URL(withProtocol);
+    if (parsed.hostname === 'api.openai.com' && (!parsed.pathname || parsed.pathname === '/')) {
+      parsed.pathname = '/v1';
+    } else {
+      const pathWithoutTrailingSlash = parsed.pathname.replace(/\/+$/, '');
+      parsed.pathname = pathWithoutTrailingSlash || '/';
+    }
+    parsed.search = '';
+    parsed.hash = '';
+    return parsed.toString().replace(/\/$/, '');
+  } catch {
+    return trimmed;
+  }
+}
+
+function validateOnboardingApiKey(apiKey: string): string | null {
+  const trimmed = apiKey.trim();
+  if (!trimmed) {
+    return 'API key is required.';
+  }
+  if (!trimmed.startsWith('sk-')) {
+    return 'API key should start with "sk-".';
+  }
+  return null;
+}
+
+function validateOnboardingApiBaseUrl(baseUrl: string): { error: string | null; suggestion: string | null } {
+  const trimmed = baseUrl.trim();
+  if (!trimmed) {
+    return {
+      error: 'API base URL is required.',
+      suggestion: 'https://api.openai.com/v1'
+    };
+  }
+
+  const suggested = normalizeApiBaseUrlInput(trimmed);
+  const suggestion = suggested && suggested !== trimmed ? suggested : null;
+  const withProtocol = /^[a-zA-Z][a-zA-Z\d+\-.]*:\/\//.test(trimmed) ? trimmed : `https://${trimmed}`;
+  let parsed: URL;
+  try {
+    parsed = new URL(withProtocol);
+  } catch {
+    return {
+      error: 'Enter a valid URL like https://api.openai.com/v1.',
+      suggestion
+    };
+  }
+
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    return {
+      error: 'URL must start with http:// or https://.',
+      suggestion
+    };
+  }
+
+  if (!parsed.hostname) {
+    return {
+      error: 'URL must include a host name.',
+      suggestion
+    };
+  }
+
+  return {
+    error: null,
+    suggestion
+  };
+}
+
+function setOnboardingApiBaseUrlFixSuggestion(suggestion: string | null): void {
+  if (!suggestion) {
+    onboardingApiBaseUrlFixBtn.classList.add('hidden');
+    onboardingApiBaseUrlFixBtn.dataset.normalizedBaseUrl = '';
+    return;
+  }
+  onboardingApiBaseUrlFixBtn.classList.remove('hidden');
+  onboardingApiBaseUrlFixBtn.dataset.normalizedBaseUrl = suggestion;
+}
+
+function normalizeBaseUrlForSettingsInput(baseUrl: string): string {
+  return normalizeApiBaseUrlInput(baseUrl) || 'https://api.openai.com/v1';
+}
+
+function validateOnboardingApiStep(): string | null {
+  const keyError = validateOnboardingApiKey(onboardingApiKeyInput.value);
+  if (keyError) {
+    setOnboardingApiKeyValidation(keyError, true);
+  } else {
+    setOnboardingApiKeyValidation('API key looks good.', false);
+  }
+
+  const baseUrlValidation = validateOnboardingApiBaseUrl(onboardingApiBaseUrlInput.value);
+  setOnboardingApiBaseUrlFixSuggestion(baseUrlValidation.suggestion);
+  if (baseUrlValidation.error) {
+    setOnboardingApiBaseUrlValidation(baseUrlValidation.error, true);
+  } else if (baseUrlValidation.suggestion) {
+    setOnboardingApiBaseUrlValidation('URL works. Use "Fix URL format" to normalize.', false);
+  } else {
+    setOnboardingApiBaseUrlValidation('API base URL looks good.', false);
+  }
+
+  return keyError || baseUrlValidation.error;
 }
 
 function normalizeMode(mode: string): RecordingMode {
@@ -837,7 +964,7 @@ function readSettingsFromForm(): Settings {
     skip_formatter_in_terminals: skipFormatterInTerminalsInput.checked,
     include_clipboard_context: includeClipboardContextInput.checked,
     play_sound_cues: playSoundCuesInput.checked,
-    api_base_url: apiBaseUrlInput.value.trim().replace(/\/$/, '') || 'https://api.openai.com/v1',
+    api_base_url: normalizeBaseUrlForSettingsInput(apiBaseUrlInput.value),
     recording_mode: normalizeMode(recordingModeInput.value),
     language: normalizeLanguage(languageInput.value)
   };
@@ -1006,6 +1133,19 @@ async function saveSettingsPayload(payload: Settings, successMessage = 'Saved se
 }
 
 function applyOnboardingSelectionsToSettingsForm(): string | null {
+  const onboardingApiError = validateOnboardingApiStep();
+  if (onboardingApiError) {
+    statusEl.textContent = onboardingApiError;
+    onboardingStepIndex = onboardingStepOrder.indexOf('api');
+    updateOnboardingStep();
+    if (validateOnboardingApiKey(onboardingApiKeyInput.value)) {
+      onboardingApiKeyInput.focus();
+    } else {
+      onboardingApiBaseUrlInput.focus();
+    }
+    return onboardingApiError;
+  }
+
   const onboardingHotkey = normalizeHotkeyInput(onboardingHotkeyInput.value);
   const onboardingHotkeyError = validateHotkey(onboardingHotkey);
   if (onboardingHotkeyError) {
@@ -1015,6 +1155,7 @@ function applyOnboardingSelectionsToSettingsForm(): string | null {
   }
 
   apiKeyInput.value = onboardingApiKeyInput.value.trim();
+  apiBaseUrlInput.value = normalizeBaseUrlForSettingsInput(onboardingApiBaseUrlInput.value);
   hotkeyInput.value = onboardingHotkey;
   recordingModeInput.value = normalizeMode(onboardingRecordingModeInput.value);
   languageInput.value = normalizeLanguage(onboardingLanguageInput.value);
@@ -1349,6 +1490,21 @@ onboardingHotkeySuggestionBtn.addEventListener('click', () => {
   validateOnboardingHotkeyInput();
 });
 
+onboardingApiKeyInput.addEventListener('input', () => {
+  validateOnboardingApiStep();
+});
+
+onboardingApiBaseUrlInput.addEventListener('input', () => {
+  validateOnboardingApiStep();
+});
+
+onboardingApiBaseUrlFixBtn.addEventListener('click', () => {
+  const normalized = onboardingApiBaseUrlFixBtn.dataset.normalizedBaseUrl;
+  if (!normalized) return;
+  onboardingApiBaseUrlInput.value = normalized;
+  validateOnboardingApiStep();
+});
+
 recordingModeInput.addEventListener('change', () => {
   applyConfigUi({
     hotkey: hotkeyInput.value,
@@ -1506,7 +1662,18 @@ onboardingBackBtn.addEventListener('click', () => {
 
 onboardingNextBtn.addEventListener('click', () => {
   if (onboardingStepOrder[onboardingStepIndex] === 'api') {
+    const apiError = validateOnboardingApiStep();
+    if (apiError) {
+      statusEl.textContent = apiError;
+      if (validateOnboardingApiKey(onboardingApiKeyInput.value)) {
+        onboardingApiKeyInput.focus();
+      } else {
+        onboardingApiBaseUrlInput.focus();
+      }
+      return;
+    }
     apiKeyInput.value = onboardingApiKeyInput.value.trim();
+    apiBaseUrlInput.value = normalizeBaseUrlForSettingsInput(onboardingApiBaseUrlInput.value);
   }
   onboardingStepIndex = Math.min(onboardingStepOrder.length - 1, onboardingStepIndex + 1);
   updateOnboardingStep();
