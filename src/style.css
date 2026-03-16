@@ -305,6 +305,14 @@ select {
   word-break: break-word;
 }
 
+.status-row strong.status-copy-success {
+  color: #1b6a3d;
+}
+
+.status-row strong.status-copy-error {
+  color: #a22d3a;
+}
+
 .field-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));

@@ -148,6 +148,7 @@ const accessibilityStatusEl = document.querySelector<HTMLParagraphElement>('#acc
 const settingsRuntimeStatusEl = document.querySelector<HTMLSpanElement>('#settings-runtime-status')!;
 const settingsAccessibilityStatusEl = document.querySelector<HTMLSpanElement>('#settings-accessibility-status')!;
 const settingsApiTestStatusEl = document.querySelector<HTMLSpanElement>('#settings-api-test-status')!;
+const settingsDiagnosticsCopyStatusEl = document.querySelector<HTMLSpanElement>('#settings-diagnostics-copy-status')!;
 const copyDiagnosticsBtn = document.querySelector<HTMLButtonElement>('#copy-diagnostics-btn')!;
 const form = document.querySelector<HTMLFormElement>('#settings-form')!;
 const toggleBtn = document.querySelector<HTMLButtonElement>('#toggle-btn')!;
@@ -304,6 +305,15 @@ function setApiDiagnosticsStatus(state: ApiDiagnosticsStatus['state'], message: 
 function formatDiagnosticsTime(timestampMs: number | null): string {
   if (timestampMs === null) return 'never';
   return new Date(timestampMs).toISOString();
+}
+
+function setDiagnosticsCopyStatus(
+  message: string,
+  state: 'idle' | 'success' | 'error' = 'idle'
+): void {
+  settingsDiagnosticsCopyStatusEl.textContent = message;
+  settingsDiagnosticsCopyStatusEl.classList.toggle('status-copy-success', state === 'success');
+  settingsDiagnosticsCopyStatusEl.classList.toggle('status-copy-error', state === 'error');
 }
 
 function buildDiagnosticsReport(): string {
@@ -1807,10 +1817,14 @@ onboardingOpenAccessibilitySettingsBtn.addEventListener('click', async () => {
 
 copyDiagnosticsBtn.addEventListener('click', async () => {
   copyDiagnosticsBtn.disabled = true;
+  setDiagnosticsCopyStatus('Copying diagnostics...');
   try {
     await invoke('copy_text_to_clipboard', { text: buildDiagnosticsReport() });
+    const copiedAt = new Date().toLocaleTimeString();
+    setDiagnosticsCopyStatus(`Copied at ${copiedAt}.`, 'success');
     statusEl.textContent = 'Diagnostics copied to clipboard.';
   } catch (error) {
+    setDiagnosticsCopyStatus(`Copy failed: ${String(error)}`, 'error');
     statusEl.textContent = `Copy failed: ${String(error)}`;
   } finally {
     copyDiagnosticsBtn.disabled = false;
