@@ -815,17 +815,20 @@ async fn process_audio_pipeline(
             ));
         }
 
-        let transcription = transcribe_audio(&state.http_client, &settings, &wav_path).await?;
-        let active_app_name = if settings.format_enabled {
-            detect_frontmost_app_name()
-        } else {
-            None
-        };
-        let clipboard_reference = if settings.format_enabled && settings.include_clipboard_context {
+        // Capture local context once before network calls to avoid drift.
+        let active_app_name = detect_frontmost_app_name();
+        let clipboard_reference = if settings.include_clipboard_context {
             capture_clipboard_reference_context()
         } else {
             None
         };
+        let transcription = transcribe_audio(
+            &state.http_client,
+            &settings,
+            &wav_path,
+            clipboard_reference.as_deref(),
+        )
+        .await?;
         let output_text = if settings.format_enabled {
             format_transcript(
                 &state.http_client,
@@ -872,10 +875,11 @@ async fn transcribe_audio(
     client: &reqwest::Client,
     settings: &Settings,
     wav_path: &PathBuf,
+    clipboard_reference: Option<&str>,
 ) -> Result<String, AppError> {
     let bytes = fs::read(wav_path)?;
     let url = format!("{}/audio/transcriptions", settings.api_base_url);
-    let form = Form::new()
+    let mut form = Form::new()
         .part(
             "file",
             Part::bytes(bytes)
@@ -884,6 +888,12 @@ async fn transcribe_audio(
                 .map_err(|e| AppError::Message(format!("MIME error: {e}")))?,
         )
         .text("model", settings.whisper_model.clone());
+    if let Some(reference) = clipboard_reference.map(str::trim).filter(|text| !text.is_empty()) {
+        form = form.text(
+            "prompt",
+            format!("Reference context for spelling and jargon: {reference}"),
+        );
+    }
 
     let response = client
         .post(url)
