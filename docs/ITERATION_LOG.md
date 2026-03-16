@@ -1,5 +1,16 @@
 # Iteration Log
 
+## 2026-03-16T09:37:56Z
+- Area worked: history export
+- User value: Adds one-click export of currently filtered transcript history to `.txt` and `.json` with count-aware filenames.
+- Files changed:
+  - `index.html`
+  - `src/main.ts`
+  - `docs/ITERATION_LOG.md`
+  - `docs/NEXT_ITERATION.md`
+- Validation result:
+  - `yarn build` (pass)
+
 ## 2026-03-16T09:08:13Z
 - Area worked: hotkey UX
 - User value: Prevents saving likely-conflicting shortcuts by warning early and offering one-click fallback presets in both Settings and onboarding.

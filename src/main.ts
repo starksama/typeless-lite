@@ -196,6 +196,8 @@ const historySearchInput = document.querySelector<HTMLInputElement>('#history-se
 const historyFilterModeInput = document.querySelector<HTMLSelectElement>('#history-filter-mode')!;
 const historyFilterLanguageInput = document.querySelector<HTMLSelectElement>('#history-filter-language')!;
 const historyFilterDateInput = document.querySelector<HTMLSelectElement>('#history-filter-date')!;
+const historyExportTxtBtn = document.querySelector<HTMLButtonElement>('#history-export-txt-btn')!;
+const historyExportJsonBtn = document.querySelector<HTMLButtonElement>('#history-export-json-btn')!;
 const historyClearBtn = document.querySelector<HTMLButtonElement>('#history-clear-btn')!;
 const historySummaryCountEl = document.querySelector<HTMLElement>('#history-summary-count')!;
 const historySummaryMedianEl = document.querySelector<HTMLElement>('#history-summary-median')!;
@@ -928,6 +930,39 @@ function getFilteredHistoryEntries(): TranscriptHistoryEntry[] {
   });
 }
 
+function buildHistoryExportFilename(extension: 'txt' | 'json', count: number): string {
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  return `typeless-history-${timestamp}-${count}-entries.${extension}`;
+}
+
+function downloadTextFile(filename: string, content: string): void {
+  const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function historyEntryExportHeader(entry: TranscriptHistoryEntry): string {
+  const sourceApp = entry.source_app?.trim() || 'Unknown app';
+  return `${formatHistoryTimestamp(entry.created_at_ms)} | ${recordingModeLabel(entry.recording_mode)} | ${languageLabel(
+    entry.language
+  )} | ${sourceApp} | ${formatLatency(entry.processing_latency_ms)}`;
+}
+
+function buildHistoryTxtExport(entries: TranscriptHistoryEntry[]): string {
+  return entries
+    .map(
+      (entry, index) =>
+        `${index + 1}. ${historyEntryExportHeader(entry)}\n${entry.final_output.trim()}\n`
+    )
+    .join('\n');
+}
+
 function renderHistoryDetail(entry: TranscriptHistoryEntry | null): void {
   const hasEntry = Boolean(entry);
   historyCopyBtn.disabled = !hasEntry;
@@ -1351,6 +1386,32 @@ historySearchInput.addEventListener('input', rerenderHistory);
 historyFilterModeInput.addEventListener('change', rerenderHistory);
 historyFilterLanguageInput.addEventListener('change', rerenderHistory);
 historyFilterDateInput.addEventListener('change', rerenderHistory);
+
+historyExportTxtBtn.addEventListener('click', () => {
+  const filteredEntries = getFilteredHistoryEntries();
+  if (filteredEntries.length === 0) {
+    statusEl.textContent = 'No filtered transcript history to export.';
+    return;
+  }
+
+  const filename = buildHistoryExportFilename('txt', filteredEntries.length);
+  const content = buildHistoryTxtExport(filteredEntries);
+  downloadTextFile(filename, content);
+  statusEl.textContent = `Exported ${filteredEntries.length} history entries to ${filename}.`;
+});
+
+historyExportJsonBtn.addEventListener('click', () => {
+  const filteredEntries = getFilteredHistoryEntries();
+  if (filteredEntries.length === 0) {
+    statusEl.textContent = 'No filtered transcript history to export.';
+    return;
+  }
+
+  const filename = buildHistoryExportFilename('json', filteredEntries.length);
+  const content = `${JSON.stringify(filteredEntries, null, 2)}\n`;
+  downloadTextFile(filename, content);
+  statusEl.textContent = `Exported ${filteredEntries.length} history entries to ${filename}.`;
+});
 
 historyClearBtn.addEventListener('click', async () => {
   const shouldClear = window.confirm('Clear all transcript history? This cannot be undone.');
