@@ -44,6 +44,8 @@ struct Settings {
     format_model: String,
     #[serde(default = "default_format_enabled")]
     format_enabled: bool,
+    #[serde(default = "default_skip_formatter_in_terminals")]
+    skip_formatter_in_terminals: bool,
     #[serde(default = "default_include_clipboard_context")]
     include_clipboard_context: bool,
     #[serde(default = "default_play_sound_cues")]
@@ -56,6 +58,10 @@ fn default_format_enabled() -> bool {
 }
 
 fn default_play_sound_cues() -> bool {
+    true
+}
+
+fn default_skip_formatter_in_terminals() -> bool {
     true
 }
 
@@ -77,6 +83,7 @@ impl Default for Settings {
             custom_vocabulary: String::new(),
             format_model: "gpt-4o-mini".to_string(),
             format_enabled: true,
+            skip_formatter_in_terminals: true,
             include_clipboard_context: true,
             play_sound_cues: true,
             api_base_url: "https://api.openai.com/v1".to_string(),
@@ -843,7 +850,17 @@ async fn process_audio_pipeline(
             clipboard_reference.as_deref(),
         )
         .await?;
-        let (output_text, inserted_message) = if settings.format_enabled {
+        let terminal_raw_insert = active_app_name
+            .as_deref()
+            .map(is_terminal_like_app)
+            .unwrap_or(false)
+            && settings.skip_formatter_in_terminals;
+        let (output_text, inserted_message) = if terminal_raw_insert {
+            (
+                transcription,
+                "Inserted raw transcript into terminal app (LLM formatter skipped).".to_string(),
+            )
+        } else if settings.format_enabled {
             let formatter_result = format_transcript(
                 &state.http_client,
                 &settings,
@@ -864,7 +881,10 @@ async fn process_audio_pipeline(
                 )
             }
         } else {
-            (transcription, "Inserted raw transcript into focused app.".to_string())
+            (
+                transcription,
+                "Inserted raw transcript into focused app.".to_string(),
+            )
         };
         paste_text(&output_text)?;
 
@@ -913,10 +933,9 @@ async fn transcribe_audio(
                 .map_err(|e| AppError::Message(format!("MIME error: {e}")))?,
         )
         .text("model", settings.whisper_model.clone());
-    if let Some(prompt) = build_transcription_prompt(
-        settings.custom_vocabulary.as_str(),
-        clipboard_reference,
-    ) {
+    if let Some(prompt) =
+        build_transcription_prompt(settings.custom_vocabulary.as_str(), clipboard_reference)
+    {
         form = form.text("prompt", prompt);
     }
 
@@ -946,7 +965,10 @@ fn build_transcription_prompt(
     custom_vocabulary: &str,
     clipboard_reference: Option<&str>,
 ) -> Option<String> {
-    let custom = truncate_chars(custom_vocabulary.trim(), TRANSCRIPTION_PROMPT_CONTEXT_MAX_CHARS);
+    let custom = truncate_chars(
+        custom_vocabulary.trim(),
+        TRANSCRIPTION_PROMPT_CONTEXT_MAX_CHARS,
+    );
     let clipboard = clipboard_reference
         .map(str::trim)
         .filter(|text| !text.is_empty())
@@ -1061,7 +1083,9 @@ fn build_formatter_system_prompt(
     };
 
     if let Some(name) = app_name {
-        prompt.push_str(&format!("\n\nCurrent target app context: {name}. {style_hint}"));
+        prompt.push_str(&format!(
+            "\n\nCurrent target app context: {name}. {style_hint}"
+        ));
     } else {
         prompt.push_str(&format!("\n\nTarget app context unavailable. {style_hint}"));
     }
@@ -1181,9 +1205,7 @@ fn is_terminal_like_app(app_name: &str) -> bool {
 
 #[cfg(target_os = "macos")]
 fn applescript_escape(input: &str) -> String {
-    input
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"")
+    input.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 #[cfg(target_os = "macos")]

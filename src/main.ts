@@ -10,6 +10,7 @@ type Settings = {
   custom_vocabulary: string;
   format_model: string;
   format_enabled: boolean;
+  skip_formatter_in_terminals: boolean;
   include_clipboard_context: boolean;
   play_sound_cues: boolean;
   api_base_url: string;
@@ -51,6 +52,7 @@ const whisperModelInput = document.querySelector<HTMLInputElement>('#whisperMode
 const customVocabularyInput = document.querySelector<HTMLTextAreaElement>('#customVocabulary')!;
 const formatModelInput = document.querySelector<HTMLInputElement>('#formatModel')!;
 const formatEnabledInput = document.querySelector<HTMLInputElement>('#formatEnabled')!;
+const skipFormatterInTerminalsInput = document.querySelector<HTMLInputElement>('#skipFormatterInTerminals')!;
 const includeClipboardContextInput = document.querySelector<HTMLInputElement>('#includeClipboardContext')!;
 const playSoundCuesInput = document.querySelector<HTMLInputElement>('#playSoundCues')!;
 const apiBaseUrlInput = document.querySelector<HTMLInputElement>('#apiBaseUrl')!;
@@ -120,6 +122,7 @@ async function loadInitial(): Promise<void> {
   customVocabularyInput.value = settings.custom_vocabulary || '';
   formatModelInput.value = settings.format_model;
   formatEnabledInput.checked = settings.format_enabled;
+  skipFormatterInTerminalsInput.checked = settings.skip_formatter_in_terminals;
   includeClipboardContextInput.checked = settings.include_clipboard_context;
   playSoundCuesInput.checked = settings.play_sound_cues;
   apiBaseUrlInput.value = settings.api_base_url;
@@ -148,6 +151,7 @@ form.addEventListener('submit', async (event) => {
     custom_vocabulary: customVocabularyInput.value.trim(),
     format_model: formatModelInput.value.trim() || 'gpt-4o-mini',
     format_enabled: formatEnabledInput.checked,
+    skip_formatter_in_terminals: skipFormatterInTerminalsInput.checked,
     include_clipboard_context: includeClipboardContextInput.checked,
     play_sound_cues: playSoundCuesInput.checked,
     api_base_url: apiBaseUrlInput.value.trim().replace(/\/$/, '') || 'https://api.openai.com/v1'

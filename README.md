@@ -118,6 +118,7 @@ Open the app window and configure:
 - `Custom Vocabulary` (optional; domain terms/names/acronyms sent as Whisper prompt guidance to improve transcription accuracy)
 - `Formatter Model` (default `gpt-4o-mini`)
 - `Run LLM formatting pass` (on by default; disable for lower latency/cost)
+- `Skip formatter in terminal apps` (on by default; when frontmost app is terminal-like, inserts raw transcript directly to reduce shell command corruption risk)
 - `Include clipboard context for formatter` (on by default; when enabled, clipboard text may be sent as optional context during formatting)
 - `Play subtle sound cues` (on by default; start/success/error earcons on macOS)
 - `Global Hotkey` (default `Cmd+Shift+Space`)
