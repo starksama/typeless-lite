@@ -13,4 +13,3 @@
   - `docs/NEXT_ITERATION.md`
 - Validation result:
   - `yarn build` (pass)
-  - Commit/push blocker: sandbox denies writes inside `.git` (`.git/index.lock: Operation not permitted`)
