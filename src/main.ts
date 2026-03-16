@@ -96,6 +96,42 @@ const NON_MODIFIER_ALIAS_TO_CANONICAL: Record<string, string> = {
 
 const KNOWN_MODIFIERS = new Set(Object.values(MODIFIER_ALIAS_TO_CANONICAL));
 
+type HotkeyConflictInfo = {
+  reason: string;
+  fallback: string;
+};
+
+const HOTKEY_CONFLICTS: Record<string, HotkeyConflictInfo> = {
+  'Cmd+Space': {
+    reason: 'Commonly reserved by macOS Spotlight.',
+    fallback: 'Cmd+Shift+Space'
+  },
+  'Cmd+Tab': {
+    reason: 'Commonly reserved by macOS App Switcher.',
+    fallback: 'Cmd+Shift+Space'
+  },
+  'Cmd+Q': {
+    reason: 'Commonly reserved by apps for Quit.',
+    fallback: 'Cmd+Shift+Space'
+  },
+  'Cmd+W': {
+    reason: 'Commonly reserved by apps for Close Window.',
+    fallback: 'Cmd+Shift+Space'
+  },
+  'Cmd+H': {
+    reason: 'Commonly reserved by apps for Hide.',
+    fallback: 'Cmd+Shift+Space'
+  },
+  'Cmd+M': {
+    reason: 'Commonly reserved by apps for Minimize.',
+    fallback: 'Cmd+Option+Space'
+  },
+  'Cmd+Option+Escape': {
+    reason: 'Reserved by macOS Force Quit dialog.',
+    fallback: 'Cmd+Shift+Space'
+  }
+};
+
 const appShellEl = document.querySelector<HTMLElement>('#app-shell')!;
 const sidebarToggleBtn = document.querySelector<HTMLButtonElement>('#sidebar-toggle-btn')!;
 const statusEl = document.querySelector<HTMLParagraphElement>('#status')!;
@@ -131,6 +167,7 @@ const apiBaseUrlInput = document.querySelector<HTMLInputElement>('#apiBaseUrl')!
 const recordingModeInput = document.querySelector<HTMLSelectElement>('#recordingMode')!;
 const languageInput = document.querySelector<HTMLSelectElement>('#language')!;
 const hotkeyValidationEl = document.querySelector<HTMLParagraphElement>('#hotkey-validation')!;
+const hotkeySuggestionBtn = document.querySelector<HTMLButtonElement>('#hotkey-suggestion-btn')!;
 const hotkeyCaptureBtn = document.querySelector<HTMLButtonElement>('#hotkey-capture-btn')!;
 const hotkeyCancelBtn = document.querySelector<HTMLButtonElement>('#hotkey-cancel-btn')!;
 const quickPresetButtons = document.querySelectorAll<HTMLButtonElement>('[data-hotkey-preset]');
@@ -181,6 +218,7 @@ const onboardingHotkeyInput = document.querySelector<HTMLInputElement>('#onboard
 const onboardingHotkeyCaptureBtn = document.querySelector<HTMLButtonElement>('#onboarding-hotkey-capture-btn')!;
 const onboardingHotkeyCancelBtn = document.querySelector<HTMLButtonElement>('#onboarding-hotkey-cancel-btn')!;
 const onboardingHotkeyValidationEl = document.querySelector<HTMLParagraphElement>('#onboarding-hotkey-validation')!;
+const onboardingHotkeySuggestionBtn = document.querySelector<HTMLButtonElement>('#onboarding-hotkey-suggestion-btn')!;
 const onboardingLanguageInput = document.querySelector<HTMLSelectElement>('#onboarding-language')!;
 const onboardingCheckAccessibilityBtn = document.querySelector<HTMLButtonElement>(
   '#onboarding-check-accessibility-btn'
@@ -427,6 +465,22 @@ function validateHotkey(hotkey: string): string | null {
   return null;
 }
 
+function getHotkeyConflictInfo(hotkey: string): HotkeyConflictInfo | null {
+  const normalized = normalizeHotkeyInput(hotkey);
+  return HOTKEY_CONFLICTS[normalized] ?? null;
+}
+
+function setHotkeySuggestion(button: HTMLButtonElement, conflictInfo: HotkeyConflictInfo | null): void {
+  if (!conflictInfo) {
+    button.classList.add('hidden');
+    button.dataset.fallbackHotkey = '';
+    return;
+  }
+  button.textContent = `Use suggested fallback: ${conflictInfo.fallback}`;
+  button.dataset.fallbackHotkey = conflictInfo.fallback;
+  button.classList.remove('hidden');
+}
+
 function hotkeyFromKeyboardEvent(event: KeyboardEvent): string {
   const parts: string[] = [];
   if (event.metaKey) parts.push('Cmd');
@@ -593,10 +647,20 @@ function readSettingsFromForm(): Settings {
 function validateHotkeyInput(): string | null {
   const validationMessage = validateHotkey(hotkeyInput.value);
   if (validationMessage) {
+    setHotkeySuggestion(hotkeySuggestionBtn, null);
     setHotkeyValidation(validationMessage, true);
     return validationMessage;
   }
+
   hotkeyInput.value = normalizeHotkeyInput(hotkeyInput.value);
+  const conflictInfo = getHotkeyConflictInfo(hotkeyInput.value);
+  setHotkeySuggestion(hotkeySuggestionBtn, conflictInfo);
+  if (conflictInfo) {
+    const conflictMessage = `Hotkey conflict preflight: ${conflictInfo.reason}`;
+    setHotkeyValidation(conflictMessage, true);
+    return conflictMessage;
+  }
+
   setHotkeyValidation('Hotkey looks good.', false);
   return null;
 }
@@ -604,10 +668,20 @@ function validateHotkeyInput(): string | null {
 function validateOnboardingHotkeyInput(): string | null {
   const validationMessage = validateHotkey(onboardingHotkeyInput.value);
   if (validationMessage) {
+    setHotkeySuggestion(onboardingHotkeySuggestionBtn, null);
     setOnboardingHotkeyValidation(validationMessage, true);
     return validationMessage;
   }
+
   onboardingHotkeyInput.value = normalizeHotkeyInput(onboardingHotkeyInput.value);
+  const conflictInfo = getHotkeyConflictInfo(onboardingHotkeyInput.value);
+  setHotkeySuggestion(onboardingHotkeySuggestionBtn, conflictInfo);
+  if (conflictInfo) {
+    const conflictMessage = `Hotkey conflict preflight: ${conflictInfo.reason}`;
+    setOnboardingHotkeyValidation(conflictMessage, true);
+    return conflictMessage;
+  }
+
   setOnboardingHotkeyValidation('Hotkey looks good.', false);
   return null;
 }
@@ -1024,6 +1098,23 @@ onboardingHotkeyPresetButtons.forEach((button) => {
     validateOnboardingHotkeyInput();
     stopHotkeyCapture();
   });
+});
+
+hotkeySuggestionBtn.addEventListener('click', () => {
+  const fallback = normalizeHotkeyInput(hotkeySuggestionBtn.dataset.fallbackHotkey || 'Cmd+Shift+Space');
+  hotkeyInput.value = fallback;
+  validateHotkeyInput();
+  applyConfigUi({
+    hotkey: fallback,
+    recording_mode: normalizeMode(recordingModeInput.value),
+    language: normalizeLanguage(languageInput.value)
+  });
+});
+
+onboardingHotkeySuggestionBtn.addEventListener('click', () => {
+  const fallback = normalizeHotkeyInput(onboardingHotkeySuggestionBtn.dataset.fallbackHotkey || 'Cmd+Shift+Space');
+  onboardingHotkeyInput.value = fallback;
+  validateOnboardingHotkeyInput();
 });
 
 recordingModeInput.addEventListener('change', () => {
