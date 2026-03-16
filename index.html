@@ -52,9 +52,11 @@
             </div>
             <div class="buttons">
               <button id="home-toggle-btn" type="button">Start / Stop</button>
+              <button id="home-fast-mode-btn" class="ghost-btn" type="button">Toggle Fast Mode</button>
               <button id="home-copy-last-btn" class="ghost-btn" type="button" disabled>Copy last transcript</button>
               <button id="home-open-last-btn" class="ghost-btn" type="button" disabled>Open last output</button>
             </div>
+            <p class="hint">Fast Mode: <strong id="home-fast-mode-state">OFF</strong> (OFF = cleaner output, ON = lower latency)</p>
             <div class="chips" aria-label="Shortcut hints">
               <span class="chip">Shortcut: <strong id="shortcut-primary-hint">Cmd+Shift+Space</strong></span>
               <span class="chip">Mode hint: <strong id="shortcut-mode-hint">Hold to record</strong></span>

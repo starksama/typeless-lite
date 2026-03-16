@@ -125,6 +125,8 @@ const summaryHotkeyEl = document.querySelector<HTMLSpanElement>('#summary-hotkey
 const summaryModeEl = document.querySelector<HTMLSpanElement>('#summary-mode')!;
 const summaryLanguageEl = document.querySelector<HTMLSpanElement>('#summary-language')!;
 const homeToggleBtn = document.querySelector<HTMLButtonElement>('#home-toggle-btn')!;
+const homeFastModeBtn = document.querySelector<HTMLButtonElement>('#home-fast-mode-btn')!;
+const homeFastModeStateEl = document.querySelector<HTMLSpanElement>('#home-fast-mode-state')!;
 const homeCopyLastBtn = document.querySelector<HTMLButtonElement>('#home-copy-last-btn')!;
 const homeOpenLastBtn = document.querySelector<HTMLButtonElement>('#home-open-last-btn')!;
 const shortcutPrimaryHintEl = document.querySelector<HTMLSpanElement>('#shortcut-primary-hint')!;
@@ -405,6 +407,11 @@ function renderStatus(status: RuntimeStatus): void {
   micLevelBarEl.style.width = `${status.is_recording ? level : 0}%`;
 }
 
+function renderFastModeState(formatEnabled: boolean): void {
+  const fastModeEnabled = !formatEnabled;
+  homeFastModeStateEl.textContent = fastModeEnabled ? 'ON' : 'OFF';
+}
+
 function renderAccessibilityStatus(status: AccessibilityPermissionStatus): void {
   const label = status.is_supported
     ? status.is_granted
@@ -481,6 +488,8 @@ async function saveSettingsPayload(payload: Settings, successMessage = 'Saved se
       recording_mode: payload.recording_mode,
       language: payload.language
     });
+    formatEnabledInput.checked = payload.format_enabled;
+    renderFastModeState(payload.format_enabled);
     statusEl.textContent = successMessage;
     return true;
   } catch (error) {
@@ -714,6 +723,7 @@ async function loadInitial(): Promise<void> {
     recording_mode: normalizeMode(settings.recording_mode),
     language: normalizeLanguage(settings.language)
   });
+  renderFastModeState(settings.format_enabled);
   validateHotkeyInput();
 
   const status = await invoke<RuntimeStatus>('get_runtime_status');
@@ -795,6 +805,24 @@ homeToggleBtn.addEventListener('click', async () => {
   } catch (error) {
     statusEl.textContent = `Toggle failed: ${String(error)}`;
   }
+});
+
+homeFastModeBtn.addEventListener('click', async () => {
+  homeFastModeBtn.disabled = true;
+  const currentSettings = readSettingsFromForm();
+  const nextFormatEnabled = !currentSettings.format_enabled;
+  const payload: Settings = {
+    ...currentSettings,
+    format_enabled: nextFormatEnabled
+  };
+  const successMessage = nextFormatEnabled
+    ? 'Fast Mode OFF: formatter enabled for higher quality, with added latency.'
+    : 'Fast Mode ON: formatter disabled for lower latency, with lower text cleanup quality.';
+  const saved = await saveSettingsPayload(payload, successMessage);
+  if (!saved) {
+    renderFastModeState(formatEnabledInput.checked);
+  }
+  homeFastModeBtn.disabled = false;
 });
 
 homeCopyLastBtn.addEventListener('click', async () => {
