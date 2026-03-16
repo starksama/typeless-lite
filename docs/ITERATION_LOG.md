@@ -1,5 +1,16 @@
 # Iteration Log
 
+## 2026-03-16T11:09:27Z
+- Area worked: onboarding UX
+- User value: Prevents incomplete first-run setup by validating API key and API base URL inline, with one-click base URL normalization before continuing.
+- Files changed:
+  - `src/main.ts`
+  - `index.html`
+  - `docs/ITERATION_LOG.md`
+  - `docs/NEXT_ITERATION.md`
+- Validation result:
+  - `yarn build` (pass)
+
 ## 2026-03-16T10:09:34Z
 - Area worked: hotkey UX
 - User value: Adds editable custom conflict fallback mappings with local persistence so preflight suggestions remain one-click while allowing per-user overrides.

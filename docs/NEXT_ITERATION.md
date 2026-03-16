@@ -1,3 +1,3 @@
-1. Add bounded retry/backoff plus explicit restore CTA for draft-recovery failures (reliability hardening). Success criteria: simulated 429/5xx paths retry safely and keep single-paste behavior with recoverable draft still intact.
-2. Add history export destination picker + success/open-folder affordance (history UX). Success criteria: users can choose save location before export and confirm file path after save.
+1. Validate API key/base URL on Settings save and `test_api_connection` preflight (consistency hardening). Success criteria: the same inline checks used in onboarding are enforced when saving settings from the main Settings form.
+2. Add bounded retry/backoff plus explicit restore CTA for draft-recovery failures (reliability hardening). Success criteria: simulated 429/5xx paths retry safely and keep single-paste behavior with recoverable draft still intact.
 3. Add import/export for custom hotkey conflict mappings (hotkey UX). Success criteria: users can back up and restore custom fallback mappings across machines without editing raw local storage.

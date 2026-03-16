@@ -368,12 +368,21 @@
         </section>
 
         <section class="onboarding-step hidden" data-onboarding-step="api">
-          <h2>API Key Setup</h2>
-          <p class="subtle">Paste your OpenAI API key. It will be saved locally in your app settings.</p>
+          <h2>API Setup</h2>
+          <p class="subtle">Add your API key and base URL. Both are saved locally in app settings.</p>
           <label class="ui-field">
             <span class="ui-label">OpenAI API Key</span>
             <input id="onboarding-api-key" class="ui-input" type="password" autocomplete="off" placeholder="sk-..." />
           </label>
+          <p id="onboarding-api-key-validation" class="field-message" role="status" aria-live="polite"></p>
+          <label class="ui-field">
+            <span class="ui-label">API Base URL</span>
+            <input id="onboarding-api-base-url" class="ui-input" type="text" value="https://api.openai.com/v1" />
+          </label>
+          <p id="onboarding-api-base-url-validation" class="field-message" role="status" aria-live="polite"></p>
+          <button id="onboarding-api-base-url-fix-btn" type="button" class="ui-button ui-button-secondary preset-btn hidden">
+            Fix URL format
+          </button>
         </section>
 
         <section class="onboarding-step hidden" data-onboarding-step="quick-setup">
