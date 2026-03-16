@@ -1,3 +1,3 @@
-1. Add transcript history export to `.txt` and `.json` (history). Success criteria: one-click export for current filtered history; exported entry count matches visible filtered count.
-2. Add bounded retry/backoff plus explicit restore CTA for draft-recovery failures (reliability hardening). Success criteria: simulated 429/5xx paths retry safely and keep single-paste behavior with recoverable draft still intact.
-3. Add editable custom fallback list for hotkey preflight conflicts (hotkey UX). Success criteria: users can override/add conflict mappings and still get one-click preset suggestions before save.
+1. Add bounded retry/backoff plus explicit restore CTA for draft-recovery failures (reliability hardening). Success criteria: simulated 429/5xx paths retry safely and keep single-paste behavior with recoverable draft still intact.
+2. Add editable custom fallback list for hotkey preflight conflicts (hotkey UX). Success criteria: users can override/add conflict mappings and still get one-click preset suggestions before save.
+3. Add history export destination picker + success/open-folder affordance (history UX). Success criteria: users can choose save location before export and confirm file path after save.
