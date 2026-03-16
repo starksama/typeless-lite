@@ -49,6 +49,7 @@ type TranscriptHistoryEntry = {
 
 type WorkspaceTab = 'home' | 'dictation' | 'history' | 'settings';
 type OnboardingStepId = 'welcome' | 'permissions' | 'api' | 'quick-setup' | 'finish';
+type HotkeyCaptureTarget = 'settings' | 'onboarding';
 
 const LANGUAGE_LABELS: Record<TranscriptionLanguage, string> = {
   auto: 'Auto',
@@ -87,6 +88,8 @@ const NON_MODIFIER_ALIAS_TO_CANONICAL: Record<string, string> = {
 
 const KNOWN_MODIFIERS = new Set(Object.values(MODIFIER_ALIAS_TO_CANONICAL));
 
+const appShellEl = document.querySelector<HTMLElement>('#app-shell')!;
+const sidebarToggleBtn = document.querySelector<HTMLButtonElement>('#sidebar-toggle-btn')!;
 const statusEl = document.querySelector<HTMLParagraphElement>('#status')!;
 const modeStatusTextEl = document.querySelector<HTMLParagraphElement>('#mode-status-text')!;
 const micLevelValueEl = document.querySelector<HTMLSpanElement>('#mic-level-value')!;
@@ -116,7 +119,10 @@ const apiBaseUrlInput = document.querySelector<HTMLInputElement>('#apiBaseUrl')!
 const recordingModeInput = document.querySelector<HTMLSelectElement>('#recordingMode')!;
 const languageInput = document.querySelector<HTMLSelectElement>('#language')!;
 const hotkeyValidationEl = document.querySelector<HTMLParagraphElement>('#hotkey-validation')!;
+const hotkeyCaptureBtn = document.querySelector<HTMLButtonElement>('#hotkey-capture-btn')!;
+const hotkeyCancelBtn = document.querySelector<HTMLButtonElement>('#hotkey-cancel-btn')!;
 const quickPresetButtons = document.querySelectorAll<HTMLButtonElement>('[data-hotkey-preset]');
+const onboardingHotkeyPresetButtons = document.querySelectorAll<HTMLButtonElement>('[data-onboarding-hotkey-preset]');
 const activeHotkeyChipEl = document.querySelector<HTMLSpanElement>('#active-hotkey-chip')!;
 const activeModeChipEl = document.querySelector<HTMLSpanElement>('#active-mode-chip')!;
 const activeLanguageChipEl = document.querySelector<HTMLSpanElement>('#active-language-chip')!;
@@ -160,6 +166,9 @@ const onboardingFinishBtn = document.querySelector<HTMLButtonElement>('#onboardi
 const onboardingApiKeyInput = document.querySelector<HTMLInputElement>('#onboarding-api-key')!;
 const onboardingRecordingModeInput = document.querySelector<HTMLSelectElement>('#onboarding-recording-mode')!;
 const onboardingHotkeyInput = document.querySelector<HTMLInputElement>('#onboarding-hotkey')!;
+const onboardingHotkeyCaptureBtn = document.querySelector<HTMLButtonElement>('#onboarding-hotkey-capture-btn')!;
+const onboardingHotkeyCancelBtn = document.querySelector<HTMLButtonElement>('#onboarding-hotkey-cancel-btn')!;
+const onboardingHotkeyValidationEl = document.querySelector<HTMLParagraphElement>('#onboarding-hotkey-validation')!;
 const onboardingLanguageInput = document.querySelector<HTMLSelectElement>('#onboarding-language')!;
 const onboardingCheckAccessibilityBtn = document.querySelector<HTMLButtonElement>(
   '#onboarding-check-accessibility-btn'
@@ -180,11 +189,18 @@ let activeConfig: Pick<Settings, 'hotkey' | 'recording_mode' | 'language'> = {
   language: 'auto'
 };
 let activeTab: WorkspaceTab = 'home';
+let isSidebarCollapsed = false;
+let activeHotkeyCaptureTarget: HotkeyCaptureTarget | null = null;
 const ONBOARDING_COMPLETED_KEY = 'typeless:onboarding-complete:v1';
+const SIDEBAR_COLLAPSED_KEY = 'typeless:sidebar-collapsed:v1';
 const onboardingStepOrder: OnboardingStepId[] = ['welcome', 'permissions', 'api', 'quick-setup', 'finish'];
 let onboardingStepIndex = 0;
 let historyEntries: TranscriptHistoryEntry[] = [];
 let historySelectedEntryId: number | null = null;
+const TOGGLE_PENDING_TIMEOUT_MS = 3000;
+let lastRuntimeStatus: RuntimeStatus | null = null;
+let togglePendingAction: 'starting' | 'stopping' | null = null;
+let togglePendingTimeoutId: number | null = null;
 
 function setActiveTab(targetTab: WorkspaceTab, focusTab = false): void {
   activeTab = targetTab;
@@ -213,7 +229,7 @@ function setupTabs(): void {
 
     button.addEventListener('keydown', (event) => {
       const key = event.key;
-      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(key)) return;
+      if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(key)) return;
       event.preventDefault();
 
       const buttons = Array.from(tabButtons);
@@ -221,8 +237,8 @@ function setupTabs(): void {
       if (currentIndex < 0) return;
 
       let nextIndex = currentIndex;
-      if (key === 'ArrowRight') nextIndex = (currentIndex + 1) % buttons.length;
-      if (key === 'ArrowLeft') nextIndex = (currentIndex - 1 + buttons.length) % buttons.length;
+      if (key === 'ArrowRight' || key === 'ArrowDown') nextIndex = (currentIndex + 1) % buttons.length;
+      if (key === 'ArrowLeft' || key === 'ArrowUp') nextIndex = (currentIndex - 1 + buttons.length) % buttons.length;
       if (key === 'Home') nextIndex = 0;
       if (key === 'End') nextIndex = buttons.length - 1;
 
@@ -233,6 +249,23 @@ function setupTabs(): void {
   });
 
   setActiveTab(activeTab);
+}
+
+function setSidebarCollapsedState(collapsed: boolean): void {
+  isSidebarCollapsed = collapsed;
+  appShellEl.classList.toggle('sidebar-collapsed', collapsed);
+  sidebarToggleBtn.setAttribute('aria-expanded', String(!collapsed));
+  sidebarToggleBtn.setAttribute('aria-label', collapsed ? 'Expand sidebar' : 'Collapse sidebar');
+}
+
+function setupSidebar(): void {
+  const persisted = localStorage.getItem(SIDEBAR_COLLAPSED_KEY);
+  setSidebarCollapsedState(persisted === 'true');
+  sidebarToggleBtn.addEventListener('click', () => {
+    const nextCollapsed = !isSidebarCollapsed;
+    setSidebarCollapsedState(nextCollapsed);
+    localStorage.setItem(SIDEBAR_COLLAPSED_KEY, nextCollapsed ? 'true' : 'false');
+  });
 }
 
 function isOnboardingCompleted(): boolean {
@@ -248,6 +281,7 @@ function syncOnboardingInputsFromSettings(): void {
   onboardingRecordingModeInput.value = normalizeMode(recordingModeInput.value);
   onboardingHotkeyInput.value = normalizeHotkeyInput(hotkeyInput.value) || 'Cmd+Shift+Space';
   onboardingLanguageInput.value = normalizeLanguage(languageInput.value);
+  validateOnboardingHotkeyInput();
 }
 
 function updateOnboardingStep(): void {
@@ -274,6 +308,9 @@ function showOnboarding(resetStep = true): void {
 }
 
 function hideOnboarding(): void {
+  if (activeHotkeyCaptureTarget === 'onboarding') {
+    stopHotkeyCapture();
+  }
   onboardingModalEl.classList.add('hidden');
 }
 
@@ -295,6 +332,11 @@ function languageLabel(language: TranscriptionLanguage): string {
 function setHotkeyValidation(message: string, isError: boolean): void {
   hotkeyValidationEl.textContent = message;
   hotkeyValidationEl.classList.toggle('error', isError);
+}
+
+function setOnboardingHotkeyValidation(message: string, isError: boolean): void {
+  onboardingHotkeyValidationEl.textContent = message;
+  onboardingHotkeyValidationEl.classList.toggle('error', isError);
 }
 
 function normalizeMode(mode: string): RecordingMode {
@@ -372,6 +414,29 @@ function validateHotkey(hotkey: string): string | null {
   return null;
 }
 
+function hotkeyFromKeyboardEvent(event: KeyboardEvent): string {
+  const parts: string[] = [];
+  if (event.metaKey) parts.push('Cmd');
+  if (event.ctrlKey) parts.push('Ctrl');
+  if (event.altKey) parts.push('Alt');
+  if (event.shiftKey) parts.push('Shift');
+
+  const key = event.key;
+  if (key && !['Meta', 'Control', 'Alt', 'Shift', 'AltGraph'].includes(key)) {
+    let normalizedKey = key;
+    if (key === ' ') normalizedKey = 'Space';
+    if (key.length === 1) normalizedKey = key.toUpperCase();
+    if (key === 'Escape') normalizedKey = 'Escape';
+    if (key === 'ArrowUp') normalizedKey = 'Up';
+    if (key === 'ArrowDown') normalizedKey = 'Down';
+    if (key === 'ArrowLeft') normalizedKey = 'Left';
+    if (key === 'ArrowRight') normalizedKey = 'Right';
+    parts.push(normalizedKey);
+  }
+
+  return normalizeHotkeyInput(parts.join('+'));
+}
+
 function applyConfigUi(config: Pick<Settings, 'hotkey' | 'recording_mode' | 'language'>): void {
   activeConfig = {
     hotkey: normalizeHotkeyInput(config.hotkey) || 'Cmd+Shift+Space',
@@ -398,6 +463,8 @@ function applyConfigUi(config: Pick<Settings, 'hotkey' | 'recording_mode' | 'lan
 }
 
 function renderStatus(status: RuntimeStatus): void {
+  lastRuntimeStatus = status;
+  clearTogglePendingState();
   const state = runtimeStateLabel(status);
   statusEl.textContent = `${state}: ${status.last_message}`;
   activeStateChipEl.textContent = state;
@@ -405,6 +472,47 @@ function renderStatus(status: RuntimeStatus): void {
   const level = Math.max(0, Math.min(100, Math.round(status.mic_level || 0)));
   micLevelValueEl.textContent = status.is_recording ? `${level}%` : '0%';
   micLevelBarEl.style.width = `${status.is_recording ? level : 0}%`;
+}
+
+function setToggleButtonsDisabled(disabled: boolean): void {
+  toggleBtn.disabled = disabled;
+  homeToggleBtn.disabled = disabled;
+}
+
+function clearTogglePendingState(): void {
+  if (togglePendingTimeoutId !== null) {
+    window.clearTimeout(togglePendingTimeoutId);
+    togglePendingTimeoutId = null;
+  }
+  togglePendingAction = null;
+  setToggleButtonsDisabled(false);
+}
+
+function beginOptimisticToggleState(): boolean {
+  if (togglePendingAction) return false;
+  const nextAction: 'starting' | 'stopping' = lastRuntimeStatus?.is_recording ? 'stopping' : 'starting';
+  togglePendingAction = nextAction;
+  setToggleButtonsDisabled(true);
+  statusEl.textContent = nextAction === 'starting' ? 'Starting recording...' : 'Stopping recording...';
+  activeStateChipEl.textContent = nextAction === 'starting' ? 'Starting...' : 'Stopping...';
+  togglePendingTimeoutId = window.setTimeout(() => {
+    clearTogglePendingState();
+  }, TOGGLE_PENDING_TIMEOUT_MS);
+  return true;
+}
+
+async function requestToggleRecording(): Promise<void> {
+  if (!beginOptimisticToggleState()) return;
+  try {
+    await invoke<void>('toggle_recording');
+    clearTogglePendingState();
+  } catch (error) {
+    clearTogglePendingState();
+    if (lastRuntimeStatus) {
+      renderStatus(lastRuntimeStatus);
+    }
+    statusEl.textContent = `Toggle failed: ${String(error)}`;
+  }
 }
 
 function renderFastModeState(formatEnabled: boolean): void {
@@ -480,17 +588,126 @@ function validateHotkeyInput(): string | null {
   return null;
 }
 
+function validateOnboardingHotkeyInput(): string | null {
+  const validationMessage = validateHotkey(onboardingHotkeyInput.value);
+  if (validationMessage) {
+    setOnboardingHotkeyValidation(validationMessage, true);
+    return validationMessage;
+  }
+  onboardingHotkeyInput.value = normalizeHotkeyInput(onboardingHotkeyInput.value);
+  setOnboardingHotkeyValidation('Hotkey looks good.', false);
+  return null;
+}
+
+function stopHotkeyCapture(message?: string, isError = false): void {
+  if (!activeHotkeyCaptureTarget) return;
+  if (activeHotkeyCaptureTarget === 'settings') {
+    hotkeyCaptureBtn.textContent = 'Edit hotkey';
+    hotkeyCaptureBtn.disabled = false;
+    hotkeyCancelBtn.classList.add('hidden');
+    if (message) setHotkeyValidation(message, isError);
+  } else {
+    onboardingHotkeyCaptureBtn.textContent = 'Edit hotkey';
+    onboardingHotkeyCaptureBtn.disabled = false;
+    onboardingHotkeyCancelBtn.classList.add('hidden');
+    if (message) setOnboardingHotkeyValidation(message, isError);
+  }
+  activeHotkeyCaptureTarget = null;
+}
+
+function startHotkeyCapture(target: HotkeyCaptureTarget): void {
+  if (activeHotkeyCaptureTarget) {
+    stopHotkeyCapture();
+  }
+  activeHotkeyCaptureTarget = target;
+  if (target === 'settings') {
+    hotkeyCaptureBtn.textContent = 'Press shortcut...';
+    hotkeyCaptureBtn.disabled = true;
+    hotkeyCancelBtn.classList.remove('hidden');
+    setHotkeyValidation('Listening for a shortcut. Press Esc to cancel.', false);
+  } else {
+    onboardingHotkeyCaptureBtn.textContent = 'Press shortcut...';
+    onboardingHotkeyCaptureBtn.disabled = true;
+    onboardingHotkeyCancelBtn.classList.remove('hidden');
+    setOnboardingHotkeyValidation('Listening for a shortcut. Press Esc to cancel.', false);
+  }
+}
+
+function setupHotkeyCapture(): void {
+  hotkeyCaptureBtn.addEventListener('click', () => {
+    startHotkeyCapture('settings');
+  });
+  onboardingHotkeyCaptureBtn.addEventListener('click', () => {
+    startHotkeyCapture('onboarding');
+  });
+
+  hotkeyCancelBtn.addEventListener('click', () => {
+    stopHotkeyCapture('Hotkey capture canceled.', false);
+  });
+  onboardingHotkeyCancelBtn.addEventListener('click', () => {
+    stopHotkeyCapture('Hotkey capture canceled.', false);
+  });
+
+  window.addEventListener(
+    'keydown',
+    (event) => {
+      if (!activeHotkeyCaptureTarget) return;
+      event.preventDefault();
+      event.stopPropagation();
+
+      if (event.key === 'Escape') {
+        stopHotkeyCapture('Hotkey capture canceled.', false);
+        return;
+      }
+
+      const candidate = hotkeyFromKeyboardEvent(event);
+      const validationMessage = validateHotkey(candidate);
+      if (validationMessage) {
+        if (activeHotkeyCaptureTarget === 'settings') {
+          setHotkeyValidation(validationMessage, true);
+        } else {
+          setOnboardingHotkeyValidation(validationMessage, true);
+        }
+        return;
+      }
+
+      if (activeHotkeyCaptureTarget === 'settings') {
+        hotkeyInput.value = candidate;
+        validateHotkeyInput();
+        applyConfigUi({
+          hotkey: candidate,
+          recording_mode: normalizeMode(recordingModeInput.value),
+          language: normalizeLanguage(languageInput.value)
+        });
+      } else {
+        onboardingHotkeyInput.value = candidate;
+        validateOnboardingHotkeyInput();
+      }
+      stopHotkeyCapture('Hotkey captured.', false);
+    },
+    true
+  );
+}
+
 async function saveSettingsPayload(payload: Settings, successMessage = 'Saved settings.'): Promise<boolean> {
   try {
     await invoke('save_settings', { settings: payload });
+    const [savedSettings, runtimeStatus] = await Promise.all([
+      invoke<Settings>('get_settings'),
+      invoke<RuntimeStatus>('get_runtime_status')
+    ]);
     applyConfigUi({
-      hotkey: payload.hotkey,
-      recording_mode: payload.recording_mode,
-      language: payload.language
+      hotkey: savedSettings.hotkey,
+      recording_mode: savedSettings.recording_mode,
+      language: savedSettings.language
     });
-    formatEnabledInput.checked = payload.format_enabled;
-    renderFastModeState(payload.format_enabled);
-    statusEl.textContent = successMessage;
+    hotkeyInput.value = normalizeHotkeyInput(savedSettings.hotkey) || hotkeyInput.value;
+    formatEnabledInput.checked = savedSettings.format_enabled;
+    renderFastModeState(savedSettings.format_enabled);
+    renderStatus(runtimeStatus);
+    if (successMessage !== 'Saved settings.') {
+      statusEl.textContent = successMessage;
+    }
     return true;
   } catch (error) {
     const errorText = String(error);
@@ -746,13 +963,17 @@ async function loadInitial(): Promise<void> {
   }
 }
 
-hotkeyInput.addEventListener('input', () => {
-  validateHotkeyInput();
+hotkeyInput.addEventListener('click', () => {
+  startHotkeyCapture('settings');
+});
+
+onboardingHotkeyInput.addEventListener('click', () => {
+  startHotkeyCapture('onboarding');
 });
 
 quickPresetButtons.forEach((button) => {
   button.addEventListener('click', () => {
-    const preset = button.dataset.hotkeyPreset || '';
+    const preset = normalizeHotkeyInput(button.dataset.hotkeyPreset || '');
     hotkeyInput.value = preset;
     validateHotkeyInput();
     applyConfigUi({
@@ -760,6 +981,16 @@ quickPresetButtons.forEach((button) => {
       recording_mode: normalizeMode(recordingModeInput.value),
       language: normalizeLanguage(languageInput.value)
     });
+    stopHotkeyCapture();
+  });
+});
+
+onboardingHotkeyPresetButtons.forEach((button) => {
+  button.addEventListener('click', () => {
+    const preset = normalizeHotkeyInput(button.dataset.onboardingHotkeyPreset || '');
+    onboardingHotkeyInput.value = preset;
+    validateOnboardingHotkeyInput();
+    stopHotkeyCapture();
   });
 });
 
@@ -791,20 +1022,12 @@ form.addEventListener('submit', async (event) => {
   await saveSettingsPayload(payload);
 });
 
-toggleBtn.addEventListener('click', async () => {
-  try {
-    await invoke('toggle_recording');
-  } catch (error) {
-    statusEl.textContent = `Toggle failed: ${String(error)}`;
-  }
+toggleBtn.addEventListener('click', () => {
+  void requestToggleRecording();
 });
 
-homeToggleBtn.addEventListener('click', async () => {
-  try {
-    await invoke('toggle_recording');
-  } catch (error) {
-    statusEl.textContent = `Toggle failed: ${String(error)}`;
-  }
+homeToggleBtn.addEventListener('click', () => {
+  void requestToggleRecording();
 });
 
 homeFastModeBtn.addEventListener('click', async () => {
@@ -1010,6 +1233,8 @@ listen<RuntimeStatus>('runtime-status', (event) => {
 });
 
 setupTabs();
+setupSidebar();
+setupHotkeyCapture();
 
 loadInitial().catch((error) => {
   statusEl.textContent = `Initialization failed: ${String(error)}`;
