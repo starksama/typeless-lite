@@ -6,6 +6,7 @@ use std::{
     io::BufWriter,
     path::PathBuf,
     process::Command,
+    sync::atomic::{AtomicU64, Ordering},
     sync::{Arc, Mutex},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -35,6 +36,8 @@ const API_TEST_TIMEOUT_SECS: u64 = 6;
 const API_CLIENT_TIMEOUT_SECS: u64 = 30;
 const TRANSCRIPT_HISTORY_LIMIT: usize = 500;
 const TRANSCRIPT_HISTORY_EVENT: &str = "transcript-history-updated";
+const HISTORY_ID_SEQUENCE_MASK: u64 = 0x3ff;
+static HISTORY_ID_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct Settings {
@@ -636,6 +639,8 @@ fn push_transcript_history_entry(
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
+    let sequence = HISTORY_ID_SEQUENCE.fetch_add(1, Ordering::Relaxed) & HISTORY_ID_SEQUENCE_MASK;
+    let entry_id = (now_ms << 10) | sequence;
 
     let snapshot = {
         let Ok(mut entries) = state.transcript_history.lock() else {
@@ -644,7 +649,7 @@ fn push_transcript_history_entry(
         entries.insert(
             0,
             TranscriptHistoryEntry {
-                id: now_ms,
+                id: entry_id,
                 created_at_ms: now_ms,
                 final_output: trimmed.to_string(),
                 recording_mode: normalize_recording_mode(recording_mode),
