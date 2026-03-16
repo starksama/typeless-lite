@@ -281,6 +281,30 @@ select {
   padding-top: 0;
 }
 
+.status-panel {
+  border-top: 1px solid #dce9f8;
+  border-radius: 12px;
+  background: #f8fbff;
+  padding: 12px;
+  gap: 8px;
+}
+
+.status-row {
+  margin: 0;
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 0.82rem;
+  color: #4f6881;
+}
+
+.status-row strong {
+  font-weight: 520;
+  color: #264762;
+  text-align: right;
+  word-break: break-word;
+}
+
 .field-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));

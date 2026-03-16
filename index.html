@@ -313,6 +313,16 @@
                 <button type="submit" class="ui-button">Save Settings</button>
                 <button id="test-api-btn" type="button" class="ui-button ui-button-secondary">Test API Connection</button>
               </div>
+
+              <div class="setting-group status-panel" aria-label="Settings status panel">
+                <h3>Status</h3>
+                <p class="status-row"><span>Runtime</span> <strong id="settings-runtime-status">Loading...</strong></p>
+                <p class="status-row"><span>Accessibility</span> <strong id="settings-accessibility-status">Not checked yet.</strong></p>
+                <p class="status-row"><span>API test</span> <strong id="settings-api-test-status">Not run yet.</strong></p>
+                <div class="buttons">
+                  <button id="copy-diagnostics-btn" type="button" class="ui-button ui-button-secondary">Copy diagnostics</button>
+                </div>
+              </div>
             </form>
           </section>
 

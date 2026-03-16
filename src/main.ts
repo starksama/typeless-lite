@@ -36,6 +36,12 @@ type AccessibilityPermissionStatus = {
   guidance: string;
 };
 
+type ApiDiagnosticsStatus = {
+  state: 'not_run' | 'testing' | 'passed' | 'failed';
+  message: string;
+  updated_at_ms: number | null;
+};
+
 type TranscriptHistoryEntry = {
   id: number;
   created_at_ms: number;
@@ -139,6 +145,10 @@ const modeStatusTextEl = document.querySelector<HTMLParagraphElement>('#mode-sta
 const micLevelValueEl = document.querySelector<HTMLSpanElement>('#mic-level-value')!;
 const micLevelBarEl = document.querySelector<HTMLDivElement>('#mic-level-bar')!;
 const accessibilityStatusEl = document.querySelector<HTMLParagraphElement>('#accessibility-status')!;
+const settingsRuntimeStatusEl = document.querySelector<HTMLSpanElement>('#settings-runtime-status')!;
+const settingsAccessibilityStatusEl = document.querySelector<HTMLSpanElement>('#settings-accessibility-status')!;
+const settingsApiTestStatusEl = document.querySelector<HTMLSpanElement>('#settings-api-test-status')!;
+const copyDiagnosticsBtn = document.querySelector<HTMLButtonElement>('#copy-diagnostics-btn')!;
 const form = document.querySelector<HTMLFormElement>('#settings-form')!;
 const toggleBtn = document.querySelector<HTMLButtonElement>('#toggle-btn')!;
 const draftRestoreBannerEl = document.querySelector<HTMLDivElement>('#draft-restore-banner')!;
@@ -263,10 +273,75 @@ let historySelectedEntryId: number | null = null;
 let durableDraft: DurableDraft | null = null;
 const TOGGLE_PENDING_TIMEOUT_MS = 3000;
 let lastRuntimeStatus: RuntimeStatus | null = null;
+let lastAccessibilityStatus: AccessibilityPermissionStatus | null = null;
+let lastApiDiagnosticsStatus: ApiDiagnosticsStatus = {
+  state: 'not_run',
+  message: 'Not run yet.',
+  updated_at_ms: null
+};
 let togglePendingAction: 'starting' | 'stopping' | null = null;
 let togglePendingTimeoutId: number | null = null;
 let customHotkeyConflicts: Record<string, HotkeyConflictInfo> = {};
 let effectiveHotkeyConflicts: Record<string, HotkeyConflictInfo> = { ...DEFAULT_HOTKEY_CONFLICTS };
+
+function setAccessibilityStatusSummary(message: string, clearStructured = false): void {
+  accessibilityStatusEl.textContent = message;
+  settingsAccessibilityStatusEl.textContent = message;
+  if (clearStructured) {
+    lastAccessibilityStatus = null;
+  }
+}
+
+function setApiDiagnosticsStatus(state: ApiDiagnosticsStatus['state'], message: string): void {
+  lastApiDiagnosticsStatus = {
+    state,
+    message,
+    updated_at_ms: Date.now()
+  };
+  settingsApiTestStatusEl.textContent = message;
+}
+
+function formatDiagnosticsTime(timestampMs: number | null): string {
+  if (timestampMs === null) return 'never';
+  return new Date(timestampMs).toISOString();
+}
+
+function buildDiagnosticsReport(): string {
+  const generatedAt = new Date().toISOString();
+  const runtime = lastRuntimeStatus;
+  const runtimeState = runtime ? runtimeStateLabel(runtime) : 'Unknown';
+  const runtimeMessage = runtime?.last_message?.trim() || 'Unavailable';
+  const runtimeMicLevel = runtime ? Math.max(0, Math.min(100, Math.round(runtime.mic_level || 0))) : 0;
+  const accessibility = lastAccessibilityStatus;
+  const accessibilitySummary = settingsAccessibilityStatusEl.textContent?.trim() || 'Unavailable';
+  const apiState = lastApiDiagnosticsStatus.state.replace('_', ' ');
+  const apiMessage = lastApiDiagnosticsStatus.message.trim() || 'Unavailable';
+
+  return [
+    'Typeless Lite Diagnostics',
+    `generated_at: ${generatedAt}`,
+    '',
+    '[runtime]',
+    `state: ${runtimeState}`,
+    `is_recording: ${runtime ? String(runtime.is_recording) : 'unknown'}`,
+    `is_processing: ${runtime ? String(runtime.is_processing) : 'unknown'}`,
+    `mic_level_percent: ${runtimeMicLevel}`,
+    `message: ${runtimeMessage}`,
+    '',
+    '[accessibility]',
+    `summary: ${accessibilitySummary}`,
+    `platform: ${accessibility ? accessibility.platform : 'unknown'}`,
+    `is_supported: ${accessibility ? String(accessibility.is_supported) : 'unknown'}`,
+    `is_granted: ${accessibility ? String(accessibility.is_granted) : 'unknown'}`,
+    `status: ${accessibility ? accessibility.status : 'unknown'}`,
+    `guidance: ${accessibility ? accessibility.guidance : 'unknown'}`,
+    '',
+    '[api_test]',
+    `state: ${apiState}`,
+    `message: ${apiMessage}`,
+    `updated_at: ${formatDiagnosticsTime(lastApiDiagnosticsStatus.updated_at_ms)}`
+  ].join('\n');
+}
 
 function setActiveTab(targetTab: WorkspaceTab, focusTab = false): void {
   activeTab = targetTab;
@@ -865,6 +940,7 @@ function renderStatus(status: RuntimeStatus): void {
   const level = Math.max(0, Math.min(100, Math.round(status.mic_level || 0)));
   micLevelValueEl.textContent = status.is_recording ? `${level}%` : '0%';
   micLevelBarEl.style.width = `${status.is_recording ? level : 0}%`;
+  settingsRuntimeStatusEl.textContent = `${state} | mic ${status.is_recording ? `${level}%` : '0%'} | ${status.last_message}`;
 }
 
 function setToggleButtonsDisabled(disabled: boolean): void {
@@ -914,12 +990,13 @@ function renderFastModeState(formatEnabled: boolean): void {
 }
 
 function renderAccessibilityStatus(status: AccessibilityPermissionStatus): void {
+  lastAccessibilityStatus = status;
   const label = status.is_supported
     ? status.is_granted
       ? 'Granted'
       : 'Not granted'
     : 'Unsupported';
-  accessibilityStatusEl.textContent = `[${label}] ${status.guidance}`;
+  setAccessibilityStatusSummary(`[${label}] ${status.guidance}`);
 }
 
 function showAccessibilityModal(): void {
@@ -944,9 +1021,9 @@ async function openAccessibilitySettingsFromUi(button: HTMLButtonElement): Promi
   button.disabled = true;
   try {
     const message = await invoke<string>('open_accessibility_settings');
-    accessibilityStatusEl.textContent = message;
+    setAccessibilityStatusSummary(message, true);
   } catch (error) {
-    accessibilityStatusEl.textContent = `Failed to open settings: ${String(error)}`;
+    setAccessibilityStatusSummary(`Failed to open settings: ${String(error)}`, true);
   } finally {
     button.disabled = false;
   }
@@ -1426,14 +1503,14 @@ async function loadInitial(): Promise<void> {
   const draft = await invoke<DurableDraft | null>('get_durable_draft');
   renderDurableDraft(draft);
 
-  accessibilityStatusEl.textContent = 'Checking Accessibility permission...';
+  setAccessibilityStatusSummary('Checking Accessibility permission...', true);
   try {
     const permissionStatus = await checkAndRenderAccessibilityStatus();
     if (shouldPromptForAccessibility(permissionStatus)) {
       showAccessibilityModal();
     }
   } catch (error) {
-    accessibilityStatusEl.textContent = `Accessibility check failed: ${String(error)}`;
+    setAccessibilityStatusSummary(`Accessibility check failed: ${String(error)}`, true);
   }
 
   if (!isOnboardingCompleted()) {
@@ -1609,11 +1686,15 @@ draftRestoreDismissBtn.addEventListener('click', async () => {
 testApiBtn.addEventListener('click', async () => {
   testApiBtn.disabled = true;
   statusEl.textContent = 'Testing API connection...';
+  setApiDiagnosticsStatus('testing', 'Running API connectivity test...');
   try {
     const result = await invoke<string>('test_api_connection');
+    setApiDiagnosticsStatus('passed', result);
     statusEl.textContent = result;
   } catch (error) {
-    statusEl.textContent = String(error);
+    const message = String(error);
+    setApiDiagnosticsStatus('failed', message);
+    statusEl.textContent = message;
   } finally {
     testApiBtn.disabled = false;
   }
@@ -1621,11 +1702,11 @@ testApiBtn.addEventListener('click', async () => {
 
 checkAccessibilityBtn.addEventListener('click', async () => {
   checkAccessibilityBtn.disabled = true;
-  accessibilityStatusEl.textContent = 'Checking Accessibility permission...';
+  setAccessibilityStatusSummary('Checking Accessibility permission...', true);
   try {
     await checkAndRenderAccessibilityStatus();
   } catch (error) {
-    accessibilityStatusEl.textContent = `Accessibility check failed: ${String(error)}`;
+    setAccessibilityStatusSummary(`Accessibility check failed: ${String(error)}`, true);
   } finally {
     checkAccessibilityBtn.disabled = false;
   }
@@ -1716,11 +1797,23 @@ onboardingOpenAccessibilitySettingsBtn.addEventListener('click', async () => {
   try {
     const message = await invoke<string>('open_accessibility_settings');
     onboardingAccessibilityStatusEl.textContent = message;
-    accessibilityStatusEl.textContent = message;
+    setAccessibilityStatusSummary(message, true);
   } catch (error) {
     onboardingAccessibilityStatusEl.textContent = `Failed to open settings: ${String(error)}`;
   } finally {
     onboardingOpenAccessibilitySettingsBtn.disabled = false;
+  }
+});
+
+copyDiagnosticsBtn.addEventListener('click', async () => {
+  copyDiagnosticsBtn.disabled = true;
+  try {
+    await invoke('copy_text_to_clipboard', { text: buildDiagnosticsReport() });
+    statusEl.textContent = 'Diagnostics copied to clipboard.';
+  } catch (error) {
+    statusEl.textContent = `Copy failed: ${String(error)}`;
+  } finally {
+    copyDiagnosticsBtn.disabled = false;
   }
 });
 

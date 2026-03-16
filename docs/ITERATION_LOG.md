@@ -1,5 +1,17 @@
 # Iteration Log
 
+## 2026-03-16T12:38:53Z
+- Area worked: settings diagnostics UX
+- User value: Adds a concise Settings status panel with one-click `Copy diagnostics` to share runtime, accessibility, and API test state in bug reports.
+- Files changed:
+  - `index.html`
+  - `src/main.ts`
+  - `src/style.css`
+  - `docs/ITERATION_LOG.md`
+  - `docs/NEXT_ITERATION.md`
+- Validation result:
+  - `yarn build` (blocked: local dependencies unavailable and network to `registry.yarnpkg.com` is unreachable in this environment)
+
 ## 2026-03-16T11:40:20Z
 - Area worked: reliability hardening
 - User value: Retries transient 429/5xx API failures during transcription/formatting and gives explicit draft recovery CTA when failures occur after draft capture.
