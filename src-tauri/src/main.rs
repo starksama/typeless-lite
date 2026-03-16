@@ -36,6 +36,7 @@ const API_TEST_TIMEOUT_SECS: u64 = 6;
 const API_CLIENT_TIMEOUT_SECS: u64 = 30;
 const TRANSCRIPT_HISTORY_LIMIT: usize = 500;
 const TRANSCRIPT_HISTORY_EVENT: &str = "transcript-history-updated";
+const DURABLE_DRAFT_EVENT: &str = "durable-draft-updated";
 const HISTORY_ID_SEQUENCE_MASK: u64 = 0x3ff;
 static HISTORY_ID_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -163,6 +164,16 @@ struct TranscriptHistoryEntry {
     processing_latency_ms: Option<u64>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct DurableDraft {
+    text: String,
+    created_at_ms: u64,
+    recording_mode: String,
+    language: String,
+    #[serde(default)]
+    source_app: Option<String>,
+}
+
 fn default_history_recording_mode() -> String {
     "hold".to_string()
 }
@@ -199,6 +210,7 @@ struct AppState {
     current_shortcut: Mutex<Option<Shortcut>>,
     http_client: reqwest::Client,
     transcript_history: Mutex<Vec<TranscriptHistoryEntry>>,
+    durable_draft: Mutex<Option<DurableDraft>>,
 }
 
 struct RecorderSession {
@@ -308,6 +320,15 @@ fn get_transcript_history(state: State<AppState>) -> Vec<TranscriptHistoryEntry>
 }
 
 #[tauri::command]
+fn get_durable_draft(state: State<AppState>) -> Option<DurableDraft> {
+    state
+        .durable_draft
+        .lock()
+        .map(|draft| draft.clone())
+        .unwrap_or(None)
+}
+
+#[tauri::command]
 fn clear_transcript_history(app: AppHandle, state: State<AppState>) -> Result<(), String> {
     {
         let mut entries = state
@@ -318,6 +339,12 @@ fn clear_transcript_history(app: AppHandle, state: State<AppState>) -> Result<()
     }
     persist_transcript_history(&app, &[]).map_err(|e| e.to_string())?;
     emit_transcript_history(&app, &state);
+    Ok(())
+}
+
+#[tauri::command]
+fn clear_durable_draft(app: AppHandle, state: State<AppState>) -> Result<(), String> {
+    set_durable_draft(&app, &state, None);
     Ok(())
 }
 
@@ -588,6 +615,28 @@ fn transcript_history_path(app: &AppHandle) -> Result<PathBuf, AppError> {
     Ok(dir.join("transcript_history.json"))
 }
 
+fn durable_draft_path(app: &AppHandle) -> Result<PathBuf, AppError> {
+    let dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|e| AppError::Message(format!("Failed resolving config dir: {e}")))?;
+    fs::create_dir_all(&dir)?;
+    Ok(dir.join("durable_draft.json"))
+}
+
+fn load_durable_draft(app: &AppHandle) -> Option<DurableDraft> {
+    let Ok(path) = durable_draft_path(app) else {
+        return None;
+    };
+    if !path.exists() {
+        return None;
+    }
+    let Ok(text) = fs::read_to_string(path) else {
+        return None;
+    };
+    serde_json::from_str(&text).ok()
+}
+
 fn load_transcript_history(app: &AppHandle) -> Vec<TranscriptHistoryEntry> {
     let Ok(path) = transcript_history_path(app) else {
         return Vec::new();
@@ -599,6 +648,17 @@ fn load_transcript_history(app: &AppHandle) -> Vec<TranscriptHistoryEntry> {
         return Vec::new();
     };
     serde_json::from_str(&text).unwrap_or_default()
+}
+
+fn persist_durable_draft(app: &AppHandle, draft: Option<&DurableDraft>) -> Result<(), AppError> {
+    let path = durable_draft_path(app)?;
+    if let Some(draft) = draft {
+        let data = serde_json::to_string_pretty(draft)?;
+        fs::write(path, data)?;
+    } else if path.exists() {
+        fs::remove_file(path)?;
+    }
+    Ok(())
 }
 
 fn persist_transcript_history(
@@ -620,6 +680,37 @@ fn emit_transcript_history(app: &AppHandle, state: &State<'_, AppState>) {
     let _ = app.emit(TRANSCRIPT_HISTORY_EVENT, payload);
 }
 
+fn emit_durable_draft(app: &AppHandle, state: &State<'_, AppState>) {
+    let payload = state
+        .durable_draft
+        .lock()
+        .map(|draft| draft.clone())
+        .unwrap_or(None);
+    let _ = app.emit(DURABLE_DRAFT_EVENT, payload);
+}
+
+fn set_durable_draft(app: &AppHandle, state: &State<'_, AppState>, draft: Option<DurableDraft>) {
+    let snapshot = {
+        let Ok(mut lock) = state.durable_draft.lock() else {
+            return;
+        };
+        *lock = draft;
+        lock.clone()
+    };
+
+    if let Err(error) = persist_durable_draft(app, snapshot.as_ref()) {
+        eprintln!("Failed to persist durable draft: {error}");
+    }
+    emit_durable_draft(app, state);
+}
+
+fn now_epoch_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 fn push_transcript_history_entry(
     app: &AppHandle,
     state: &State<'_, AppState>,
@@ -635,10 +726,7 @@ fn push_transcript_history_entry(
         return;
     }
 
-    let now_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0);
+    let now_ms = now_epoch_ms();
     let sequence = HISTORY_ID_SEQUENCE.fetch_add(1, Ordering::Relaxed) & HISTORY_ID_SEQUENCE_MASK;
     let entry_id = (now_ms << 10) | sequence;
 
@@ -958,13 +1046,20 @@ fn toggle_recording_inner(app: &AppHandle, state: &State<AppState>) -> Result<()
                 )
                 .await
             {
+                let draft_hint = app_state
+                    .durable_draft
+                    .lock()
+                    .ok()
+                    .and_then(|draft| draft.clone())
+                    .map(|_| " Draft saved in Dictation tab for recovery.")
+                    .unwrap_or("");
                 set_status(
                     &app_handle,
                     &app_state,
                     Some(false),
                     Some(false),
                     Some(0),
-                    format!("Failed: {err}"),
+                    format!("Failed: {err}{draft_hint}"),
                 );
                 play_earcon_if_enabled(&app_state, Earcon::Error);
             }
@@ -1176,6 +1271,17 @@ async fn process_audio_pipeline(
             clipboard_reference.as_deref(),
         )
         .await?;
+        set_durable_draft(
+            app,
+            state,
+            Some(DurableDraft {
+                text: transcription.clone(),
+                created_at_ms: now_epoch_ms(),
+                recording_mode: normalize_recording_mode(&settings.recording_mode),
+                language: normalize_transcription_language(&settings.language),
+                source_app: active_app_name.clone(),
+            }),
+        );
         let terminal_raw_insert = active_app_name
             .as_deref()
             .map(is_terminal_like_app)
@@ -1235,6 +1341,7 @@ async fn process_audio_pipeline(
 
     let latency_ms = processing_started_at.elapsed().as_millis() as u64;
     let (inserted_message, output_text, source_app, recording_mode, language) = result?;
+    set_durable_draft(app, state, None);
     push_transcript_history_entry(
         app,
         state,
@@ -1774,6 +1881,7 @@ fn main() {
                 .map_err(|e| Box::<dyn std::error::Error>::from(e.to_string()))?;
 
             let transcript_history = load_transcript_history(app.handle());
+            let durable_draft = load_durable_draft(app.handle());
             let state = AppState {
                 settings: Mutex::new(settings.clone()),
                 runtime_status: Mutex::new(RuntimeStatus {
@@ -1786,6 +1894,7 @@ fn main() {
                 current_shortcut: Mutex::new(None),
                 http_client,
                 transcript_history: Mutex::new(transcript_history),
+                durable_draft: Mutex::new(durable_draft),
             };
             app.manage(state);
 
@@ -1812,6 +1921,7 @@ fn main() {
                 );
             }
             emit_transcript_history(app.handle(), &app_state);
+            emit_durable_draft(app.handle(), &app_state);
 
             let open_item = MenuItem::with_id(app, "open", "Open Settings", true, None::<&str>)?;
             let toggle_item =
@@ -1849,6 +1959,8 @@ fn main() {
             get_runtime_status,
             get_transcript_history,
             clear_transcript_history,
+            get_durable_draft,
+            clear_durable_draft,
             copy_text_to_clipboard,
             toggle_recording,
             test_api_connection,
