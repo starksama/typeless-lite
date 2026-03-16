@@ -10,6 +10,14 @@ Core workflow:
 3. Optionally format/clean with an LLM.
 4. Insert into the active input quickly.
 
+## UI Direction Guardrails
+
+- Prefer restrained typography. Bold weights should be used sparingly, not as the default hierarchy.
+- Keep the main surfaces task-focused. Avoid promotional filler cards or self-referential copy on Home and Dictation.
+- Keep the sidebar narrow and utilitarian. Avoid oversized rails, oversized icons, or decorative copy.
+- Reduce corner radius across the app. The product should feel professional and calm, not cute.
+- Keep settings separated into their own workspace with practical section labels and operational copy.
+
 ## Key References
 
 ### Tauri: shortcuts, tray, distribution

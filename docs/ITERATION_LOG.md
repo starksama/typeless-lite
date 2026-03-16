@@ -1,5 +1,28 @@
 # Iteration Log
 
+## 2026-03-16T14:18:00Z
+- Area worked: cross-app insertion reliability
+- User value: Captures the destination app at record start and reactivates it before insertion, so processed dictation is pasted back into the intended app instead of whichever window is frontmost later.
+- Files changed:
+  - `src-tauri/src/main.rs`
+  - `README.md`
+  - `docs/ITERATION_LOG.md`
+- Validation result:
+  - `cargo check --manifest-path src-tauri/Cargo.toml` (pass)
+  - `npm run build` (pass)
+
+## 2026-03-16T13:42:00Z
+- Area worked: visual polish follow-up
+- User value: Removes filler marketing cards, narrows the sidebar, reduces roundness, and tones down typography so the app feels more professional and less toy-like.
+- Files changed:
+  - `index.html`
+  - `src/main.ts`
+  - `src/style.css`
+  - `docs/RESEARCH_NOTES.md`
+  - `docs/ITERATION_LOG.md`
+- Validation result:
+  - `npm run build` (pass)
+
 ## 2026-03-16T13:09:39Z
 - Area worked: settings diagnostics UX follow-up
 - User value: Adds explicit in-panel feedback for `Copy diagnostics` (copying/success/failure) so users can confirm outcome without leaving Settings.

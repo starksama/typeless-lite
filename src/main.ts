@@ -1,6 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import './style.css';
 
 type RecordingMode = 'hold' | 'toggle';
 type TranscriptionLanguage = 'auto' | 'en' | 'zh' | 'zh-TW' | 'ja' | 'ko' | 'es' | 'fr' | 'de';
@@ -64,6 +63,7 @@ type DurableDraft = {
 type WorkspaceTab = 'home' | 'dictation' | 'history' | 'settings';
 type OnboardingStepId = 'welcome' | 'permissions' | 'api' | 'quick-setup' | 'finish';
 type HotkeyCaptureTarget = 'settings' | 'onboarding';
+type SettingsSection = 'general' | 'shortcuts' | 'ai' | 'privacy';
 
 const LANGUAGE_LABELS: Record<TranscriptionLanguage, string> = {
   auto: 'Auto',
@@ -140,15 +140,16 @@ const DEFAULT_HOTKEY_CONFLICTS: Record<string, HotkeyConflictInfo> = {
 
 const appShellEl = document.querySelector<HTMLElement>('#app-shell')!;
 const sidebarToggleBtn = document.querySelector<HTMLButtonElement>('#sidebar-toggle-btn')!;
+const sidebarToggleCopyEl = document.querySelector<HTMLSpanElement>('#sidebar-toggle-copy')!;
 const statusEl = document.querySelector<HTMLParagraphElement>('#status')!;
 const modeStatusTextEl = document.querySelector<HTMLParagraphElement>('#mode-status-text')!;
 const micLevelValueEl = document.querySelector<HTMLSpanElement>('#mic-level-value')!;
 const micLevelBarEl = document.querySelector<HTMLDivElement>('#mic-level-bar')!;
-const accessibilityStatusEl = document.querySelector<HTMLParagraphElement>('#accessibility-status')!;
-const settingsRuntimeStatusEl = document.querySelector<HTMLSpanElement>('#settings-runtime-status')!;
-const settingsAccessibilityStatusEl = document.querySelector<HTMLSpanElement>('#settings-accessibility-status')!;
-const settingsApiTestStatusEl = document.querySelector<HTMLSpanElement>('#settings-api-test-status')!;
-const settingsDiagnosticsCopyStatusEl = document.querySelector<HTMLSpanElement>('#settings-diagnostics-copy-status')!;
+const accessibilityStatusEl = document.querySelector<HTMLElement>('#accessibility-status')!;
+const settingsRuntimeStatusEl = document.querySelector<HTMLElement>('#settings-runtime-status')!;
+const settingsAccessibilityStatusEl = document.querySelector<HTMLElement>('#settings-accessibility-status')!;
+const settingsApiTestStatusEl = document.querySelector<HTMLElement>('#settings-api-test-status')!;
+const settingsDiagnosticsCopyStatusEl = document.querySelector<HTMLElement>('#settings-diagnostics-copy-status')!;
 const copyDiagnosticsBtn = document.querySelector<HTMLButtonElement>('#copy-diagnostics-btn')!;
 const form = document.querySelector<HTMLFormElement>('#settings-form')!;
 const toggleBtn = document.querySelector<HTMLButtonElement>('#toggle-btn')!;
@@ -205,6 +206,8 @@ const homeLastOutputPreviewEl = document.querySelector<HTMLPreElement>('#home-la
 const homeLastOutputMetaEl = document.querySelector<HTMLParagraphElement>('#home-last-output-meta')!;
 const tabButtons = document.querySelectorAll<HTMLButtonElement>('[data-tab-target]');
 const tabPanels = document.querySelectorAll<HTMLElement>('[data-tab-panel]');
+const settingsSectionButtons = document.querySelectorAll<HTMLButtonElement>('[data-settings-target]');
+const settingsSectionPanels = document.querySelectorAll<HTMLElement>('[data-settings-panel]');
 const historyListEl = document.querySelector<HTMLUListElement>('#history-list')!;
 const historyEmptyEl = document.querySelector<HTMLParagraphElement>('#history-empty')!;
 const historySearchInput = document.querySelector<HTMLInputElement>('#history-search')!;
@@ -262,11 +265,14 @@ let activeConfig: Pick<Settings, 'hotkey' | 'recording_mode' | 'language'> = {
   language: 'auto'
 };
 let activeTab: WorkspaceTab = 'home';
+let activeSettingsSection: SettingsSection = 'general';
 let isSidebarCollapsed = false;
 let activeHotkeyCaptureTarget: HotkeyCaptureTarget | null = null;
 const ONBOARDING_COMPLETED_KEY = 'typeless:onboarding-complete:v1';
 const SIDEBAR_COLLAPSED_KEY = 'typeless:sidebar-collapsed:v1';
+const SETTINGS_SECTION_KEY = 'typeless:settings-section:v1';
 const HOTKEY_CUSTOM_CONFLICTS_KEY = 'typeless:hotkey-custom-conflicts:v1';
+const SETTINGS_SECTION_ORDER: SettingsSection[] = ['general', 'shortcuts', 'ai', 'privacy'];
 const onboardingStepOrder: OnboardingStepId[] = ['welcome', 'permissions', 'api', 'quick-setup', 'finish'];
 let onboardingStepIndex = 0;
 let historyEntries: TranscriptHistoryEntry[] = [];
@@ -293,13 +299,24 @@ function setAccessibilityStatusSummary(message: string, clearStructured = false)
   }
 }
 
+function apiDiagnosticsSummaryLabel(state: ApiDiagnosticsStatus['state']): string {
+  if (state === 'testing') return 'Testing API...';
+  if (state === 'passed') return 'API ok';
+  if (state === 'failed') return 'API failed';
+  return '';
+}
+
 function setApiDiagnosticsStatus(state: ApiDiagnosticsStatus['state'], message: string): void {
   lastApiDiagnosticsStatus = {
     state,
     message,
     updated_at_ms: Date.now()
   };
-  settingsApiTestStatusEl.textContent = message;
+  settingsApiTestStatusEl.textContent = apiDiagnosticsSummaryLabel(state);
+  settingsApiTestStatusEl.classList.toggle('hidden', state === 'not_run');
+  settingsApiTestStatusEl.classList.toggle('status-copy-success', state === 'passed');
+  settingsApiTestStatusEl.classList.toggle('status-copy-error', state === 'failed');
+  settingsApiTestStatusEl.classList.toggle('error', state === 'failed');
 }
 
 function formatDiagnosticsTime(timestampMs: number | null): string {
@@ -312,6 +329,7 @@ function setDiagnosticsCopyStatus(
   state: 'idle' | 'success' | 'error' = 'idle'
 ): void {
   settingsDiagnosticsCopyStatusEl.textContent = message;
+  settingsDiagnosticsCopyStatusEl.classList.toggle('hidden', message.trim().length === 0);
   settingsDiagnosticsCopyStatusEl.classList.toggle('status-copy-success', state === 'success');
   settingsDiagnosticsCopyStatusEl.classList.toggle('status-copy-error', state === 'error');
 }
@@ -372,6 +390,28 @@ function setActiveTab(targetTab: WorkspaceTab, focusTab = false): void {
   });
 }
 
+function setActiveSettingsSection(targetSection: SettingsSection, focusButton = false): void {
+  activeSettingsSection = targetSection;
+
+  settingsSectionButtons.forEach((button) => {
+    const isActive = button.dataset.settingsTarget === targetSection;
+    button.classList.toggle('is-active', isActive);
+    button.setAttribute('aria-pressed', String(isActive));
+    button.tabIndex = isActive ? 0 : -1;
+    if (isActive && focusButton) {
+      button.focus();
+    }
+  });
+
+  settingsSectionPanels.forEach((panel) => {
+    const isActive = panel.dataset.settingsPanel === targetSection;
+    panel.classList.toggle('is-active', isActive);
+    panel.hidden = !isActive;
+  });
+
+  localStorage.setItem(SETTINGS_SECTION_KEY, targetSection);
+}
+
 function setupTabs(): void {
   tabButtons.forEach((button) => {
     button.addEventListener('click', () => {
@@ -402,11 +442,49 @@ function setupTabs(): void {
   setActiveTab(activeTab);
 }
 
+function setupSettingsSections(): void {
+  const persisted = localStorage.getItem(SETTINGS_SECTION_KEY);
+  if (persisted && SETTINGS_SECTION_ORDER.includes(persisted as SettingsSection)) {
+    activeSettingsSection = persisted as SettingsSection;
+  }
+
+  settingsSectionButtons.forEach((button) => {
+    button.addEventListener('click', () => {
+      const target = (button.dataset.settingsTarget as SettingsSection) || 'general';
+      setActiveSettingsSection(target);
+    });
+
+    button.addEventListener('keydown', (event) => {
+      const key = event.key;
+      if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(key)) return;
+      event.preventDefault();
+
+      const buttons = Array.from(settingsSectionButtons);
+      const currentIndex = buttons.indexOf(button);
+      if (currentIndex < 0) return;
+
+      let nextIndex = currentIndex;
+      if (key === 'ArrowRight' || key === 'ArrowDown') nextIndex = (currentIndex + 1) % buttons.length;
+      if (key === 'ArrowLeft' || key === 'ArrowUp') nextIndex = (currentIndex - 1 + buttons.length) % buttons.length;
+      if (key === 'Home') nextIndex = 0;
+      if (key === 'End') nextIndex = buttons.length - 1;
+
+      const nextButton = buttons[nextIndex];
+      const nextSection = (nextButton.dataset.settingsTarget as SettingsSection) || 'general';
+      setActiveSettingsSection(nextSection, true);
+    });
+  });
+
+  setActiveSettingsSection(activeSettingsSection);
+}
+
 function setSidebarCollapsedState(collapsed: boolean): void {
   isSidebarCollapsed = collapsed;
   appShellEl.classList.toggle('sidebar-collapsed', collapsed);
   sidebarToggleBtn.setAttribute('aria-expanded', String(!collapsed));
   sidebarToggleBtn.setAttribute('aria-label', collapsed ? 'Expand sidebar' : 'Collapse sidebar');
+  sidebarToggleBtn.title = collapsed ? 'Expand sidebar' : 'Collapse sidebar';
+  sidebarToggleCopyEl.textContent = collapsed ? 'Expand sidebar' : 'Collapse sidebar';
 }
 
 function setupSidebar(): void {
@@ -940,17 +1018,39 @@ function applyConfigUi(config: Pick<Settings, 'hotkey' | 'recording_mode' | 'lan
       : 'Hold-to-record mode active: hold the hotkey to record and release to stop.';
 }
 
+function setRecordingActionLabels(
+  isRecording: boolean,
+  pendingAction: 'starting' | 'stopping' | null = null
+): void {
+  if (pendingAction === 'starting') {
+    toggleBtn.textContent = 'Starting...';
+    homeToggleBtn.textContent = 'Starting...';
+    return;
+  }
+
+  if (pendingAction === 'stopping') {
+    toggleBtn.textContent = 'Stopping...';
+    homeToggleBtn.textContent = 'Stopping...';
+    return;
+  }
+
+  const label = isRecording ? 'Stop recording' : 'Start recording';
+  toggleBtn.textContent = label;
+  homeToggleBtn.textContent = label;
+}
+
 function renderStatus(status: RuntimeStatus): void {
   lastRuntimeStatus = status;
-  clearTogglePendingState();
+  clearTogglePendingState(status.is_recording);
   const state = runtimeStateLabel(status);
   statusEl.textContent = `${state}: ${status.last_message}`;
   activeStateChipEl.textContent = state;
+  setRecordingActionLabels(status.is_recording);
 
   const level = Math.max(0, Math.min(100, Math.round(status.mic_level || 0)));
   micLevelValueEl.textContent = status.is_recording ? `${level}%` : '0%';
   micLevelBarEl.style.width = `${status.is_recording ? level : 0}%`;
-  settingsRuntimeStatusEl.textContent = `${state} | mic ${status.is_recording ? `${level}%` : '0%'} | ${status.last_message}`;
+  settingsRuntimeStatusEl.textContent = state;
 }
 
 function setToggleButtonsDisabled(disabled: boolean): void {
@@ -958,13 +1058,14 @@ function setToggleButtonsDisabled(disabled: boolean): void {
   homeToggleBtn.disabled = disabled;
 }
 
-function clearTogglePendingState(): void {
+function clearTogglePendingState(nextIsRecording = Boolean(lastRuntimeStatus?.is_recording)): void {
   if (togglePendingTimeoutId !== null) {
     window.clearTimeout(togglePendingTimeoutId);
     togglePendingTimeoutId = null;
   }
   togglePendingAction = null;
   setToggleButtonsDisabled(false);
+  setRecordingActionLabels(nextIsRecording);
 }
 
 function beginOptimisticToggleState(): boolean {
@@ -972,6 +1073,7 @@ function beginOptimisticToggleState(): boolean {
   const nextAction: 'starting' | 'stopping' = lastRuntimeStatus?.is_recording ? 'stopping' : 'starting';
   togglePendingAction = nextAction;
   setToggleButtonsDisabled(true);
+  setRecordingActionLabels(nextAction === 'starting', nextAction);
   statusEl.textContent = nextAction === 'starting' ? 'Starting recording...' : 'Stopping recording...';
   activeStateChipEl.textContent = nextAction === 'starting' ? 'Starting...' : 'Stopping...';
   togglePendingTimeoutId = window.setTimeout(() => {
@@ -982,11 +1084,12 @@ function beginOptimisticToggleState(): boolean {
 
 async function requestToggleRecording(): Promise<void> {
   if (!beginOptimisticToggleState()) return;
+  const optimisticNextState = togglePendingAction === 'starting';
   try {
     await invoke<void>('toggle_recording');
-    clearTogglePendingState();
+    clearTogglePendingState(optimisticNextState);
   } catch (error) {
-    clearTogglePendingState();
+    clearTogglePendingState(Boolean(lastRuntimeStatus?.is_recording));
     if (lastRuntimeStatus) {
       renderStatus(lastRuntimeStatus);
     }
@@ -997,16 +1100,17 @@ async function requestToggleRecording(): Promise<void> {
 function renderFastModeState(formatEnabled: boolean): void {
   const fastModeEnabled = !formatEnabled;
   homeFastModeStateEl.textContent = fastModeEnabled ? 'ON' : 'OFF';
+  homeFastModeBtn.textContent = fastModeEnabled ? 'Turn Fast Mode Off' : 'Turn Fast Mode On';
 }
 
 function renderAccessibilityStatus(status: AccessibilityPermissionStatus): void {
   lastAccessibilityStatus = status;
   const label = status.is_supported
     ? status.is_granted
-      ? 'Granted'
-      : 'Not granted'
+      ? 'Enabled'
+      : 'Needs access'
     : 'Unsupported';
-  setAccessibilityStatusSummary(`[${label}] ${status.guidance}`);
+  setAccessibilityStatusSummary(label);
 }
 
 function showAccessibilityModal(): void {
@@ -1031,9 +1135,10 @@ async function openAccessibilitySettingsFromUi(button: HTMLButtonElement): Promi
   button.disabled = true;
   try {
     const message = await invoke<string>('open_accessibility_settings');
-    setAccessibilityStatusSummary(message, true);
+    statusEl.textContent = message;
+    setAccessibilityStatusSummary('Settings opened', true);
   } catch (error) {
-    setAccessibilityStatusSummary(`Failed to open settings: ${String(error)}`, true);
+    setAccessibilityStatusSummary('Open failed', true);
   } finally {
     button.disabled = false;
   }
@@ -1212,6 +1317,8 @@ async function saveSettingsPayload(payload: Settings, successMessage = 'Saved se
   } catch (error) {
     const errorText = String(error);
     if (errorText.toLowerCase().includes('hotkey')) {
+      setActiveTab('settings');
+      setActiveSettingsSection('shortcuts');
       setHotkeyValidation('Hotkey is invalid for this system. Try one of the preset combos.', true);
     }
     statusEl.textContent = `Failed to save settings: ${errorText}`;
@@ -1513,14 +1620,14 @@ async function loadInitial(): Promise<void> {
   const draft = await invoke<DurableDraft | null>('get_durable_draft');
   renderDurableDraft(draft);
 
-  setAccessibilityStatusSummary('Checking Accessibility permission...', true);
+  setAccessibilityStatusSummary('Checking...', true);
   try {
     const permissionStatus = await checkAndRenderAccessibilityStatus();
     if (shouldPromptForAccessibility(permissionStatus)) {
       showAccessibilityModal();
     }
   } catch (error) {
-    setAccessibilityStatusSummary(`Accessibility check failed: ${String(error)}`, true);
+    setAccessibilityStatusSummary('Check failed', true);
   }
 
   if (!isOnboardingCompleted()) {
@@ -1612,6 +1719,8 @@ form.addEventListener('submit', async (event) => {
   event.preventDefault();
   const hotkeyError = validateHotkeyInput();
   if (hotkeyError) {
+    setActiveTab('settings');
+    setActiveSettingsSection('shortcuts');
     statusEl.textContent = hotkeyError;
     return;
   }
@@ -1712,11 +1821,11 @@ testApiBtn.addEventListener('click', async () => {
 
 checkAccessibilityBtn.addEventListener('click', async () => {
   checkAccessibilityBtn.disabled = true;
-  setAccessibilityStatusSummary('Checking Accessibility permission...', true);
+  setAccessibilityStatusSummary('Checking...', true);
   try {
     await checkAndRenderAccessibilityStatus();
   } catch (error) {
-    setAccessibilityStatusSummary(`Accessibility check failed: ${String(error)}`, true);
+    setAccessibilityStatusSummary('Check failed', true);
   } finally {
     checkAccessibilityBtn.disabled = false;
   }
@@ -1919,6 +2028,7 @@ listen<RuntimeStatus>('runtime-status', (event) => {
 });
 
 setupTabs();
+setupSettingsSections();
 setupSidebar();
 setupHotkeyCapture();
 setupHotkeyFallbackMappingsEditor();

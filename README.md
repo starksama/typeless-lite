@@ -4,7 +4,7 @@ Open-source macOS voice-to-text assistant (Typeless / Flow-style alternative):
 - global hotkey dictation,
 - Whisper transcription,
 - optional LLM cleanup,
-- paste into the focused app/terminal.
+- paste back into the app/terminal that was active when dictation started.
 
 ## Features
 
@@ -16,7 +16,7 @@ Open-source macOS voice-to-text assistant (Typeless / Flow-style alternative):
 - Context-aware formatting hints (terminal/chat/email)
 - Optional clipboard context for formatter
 - Optional fast mode (skip formatter)
-- Paste into focused app with clipboard restore
+- Paste back into the prior target app with clipboard restore
 - Accessibility permission helper + startup prompt
 - First-run onboarding wizard + reopen option
 - Transcript history center (search/filter/copy/reuse/clear)

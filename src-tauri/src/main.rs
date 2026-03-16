@@ -26,6 +26,7 @@ const APP_STATUS_EVENT: &str = "runtime-status";
 const TRAY_ID: &str = "main-tray";
 const PRE_RECORDING_COPY_DELAY_MS: u64 = 80;
 const PRE_PASTE_DELAY_MS: u64 = 60;
+const TARGET_APP_REFOCUS_DELAY_MS: u64 = 120;
 const PASTE_RETRY_BACKOFF_MS: u64 = 45;
 const CLIPBOARD_RESTORE_DELAY_MS: u64 = 300;
 const FORMAT_CONTEXT_CLIPBOARD_MAX_CHARS: usize = 500;
@@ -221,6 +222,7 @@ struct RecorderSession {
     path: PathBuf,
     started_at: Instant,
     pre_recording_clipboard_context: Option<String>,
+    insertion_target_app: Option<String>,
 }
 
 #[derive(Clone)]
@@ -252,7 +254,7 @@ enum AppError {
 }
 
 impl RecorderSession {
-    fn stop(self) -> Result<(PathBuf, Duration, Option<String>), AppError> {
+    fn stop(self) -> Result<(PathBuf, Duration, Option<String>, Option<String>), AppError> {
         let elapsed = self.started_at.elapsed();
         drop(self.stream);
         let mut writer_lock = self
@@ -264,7 +266,12 @@ impl RecorderSession {
                 .finalize()
                 .map_err(|e| AppError::Message(format!("Failed to finalize WAV: {e}")))?;
         }
-        Ok((self.path, elapsed, self.pre_recording_clipboard_context))
+        Ok((
+            self.path,
+            elapsed,
+            self.pre_recording_clipboard_context,
+            self.insertion_target_app,
+        ))
     }
 }
 
@@ -1009,7 +1016,7 @@ fn toggle_recording_inner(app: &AppHandle, state: &State<AppState>) -> Result<()
     };
 
     if let Some(session) = maybe_session {
-        let (wav_path, elapsed, pre_recording_clipboard_context) =
+        let (wav_path, elapsed, pre_recording_clipboard_context, insertion_target_app) =
             session.stop().map_err(|e| e.to_string())?;
         if elapsed.as_millis() < MIN_RECORDING_MS {
             let _ = fs::remove_file(&wav_path);
@@ -1044,6 +1051,7 @@ fn toggle_recording_inner(app: &AppHandle, state: &State<AppState>) -> Result<()
                     &app_state,
                     wav_path,
                     pre_recording_clipboard_context,
+                    insertion_target_app,
                     processing_started_at,
                 )
                 .await
@@ -1166,6 +1174,7 @@ fn start_recording(
         path,
         started_at: Instant::now(),
         pre_recording_clipboard_context,
+        insertion_target_app: capture_insertion_target_app(app),
     })
 }
 
@@ -1244,6 +1253,7 @@ async fn process_audio_pipeline(
     state: &State<'_, AppState>,
     wav_path: PathBuf,
     pre_recording_clipboard_context: Option<String>,
+    insertion_target_app: Option<String>,
     processing_started_at: Instant,
 ) -> Result<(), AppError> {
     let pipeline_result = async {
@@ -1260,7 +1270,7 @@ async fn process_audio_pipeline(
         }
 
         // Capture local context once before network calls to avoid drift.
-        let active_app_name = detect_frontmost_app_name();
+        let active_app_name = insertion_target_app.clone();
         let clipboard_reference = if settings.include_clipboard_context {
             pre_recording_clipboard_context.or_else(capture_clipboard_reference_context)
         } else {
@@ -1284,6 +1294,9 @@ async fn process_audio_pipeline(
                 source_app: active_app_name.clone(),
             }),
         );
+        let insertion_destination = active_app_name
+            .clone()
+            .unwrap_or_else(|| "focused app".to_string());
         let terminal_raw_insert = active_app_name
             .as_deref()
             .map(is_terminal_like_app)
@@ -1292,7 +1305,9 @@ async fn process_audio_pipeline(
         let (output_text, inserted_message) = if terminal_raw_insert {
             (
                 transcription,
-                "Inserted raw transcript into terminal app (LLM formatter skipped).".to_string(),
+                format!(
+                    "Inserted raw transcript into {insertion_destination} (LLM formatter skipped)."
+                ),
             )
         } else if settings.format_enabled {
             let formatter_result = format_transcript(
@@ -1306,21 +1321,23 @@ async fn process_audio_pipeline(
             if formatter_result.used_raw_fallback {
                 (
                     formatter_result.text,
-                    "Inserted raw transcript (formatter output failed safety check).".to_string(),
+                    format!(
+                        "Inserted raw transcript into {insertion_destination} (formatter output failed safety check)."
+                    ),
                 )
             } else {
                 (
                     formatter_result.text,
-                    "Inserted text into focused app.".to_string(),
+                    format!("Inserted text into {insertion_destination}."),
                 )
             }
         } else {
             (
                 transcription,
-                "Inserted raw transcript into focused app.".to_string(),
+                format!("Inserted raw transcript into {insertion_destination}."),
             )
         };
-        paste_text(&output_text)?;
+        paste_text(app, &output_text, insertion_target_app.as_deref())?;
 
         Ok::<(String, String, Option<String>, String, String), AppError>((
             inserted_message,
@@ -1733,6 +1750,36 @@ fn detect_frontmost_app_name() -> Option<String> {
     None
 }
 
+fn normalize_app_name_for_compare(app_name: &str) -> String {
+    app_name
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .flat_map(|ch| ch.to_lowercase())
+        .collect()
+}
+
+fn app_names_match(left: &str, right: &str) -> bool {
+    normalize_app_name_for_compare(left) == normalize_app_name_for_compare(right)
+}
+
+fn is_current_app_name(app: &AppHandle, candidate_app_name: &str) -> bool {
+    app_names_match(candidate_app_name, &app.package_info().name)
+}
+
+#[cfg(target_os = "macos")]
+fn capture_insertion_target_app(app: &AppHandle) -> Option<String> {
+    let frontmost_app = detect_frontmost_app_name()?;
+    if is_current_app_name(app, &frontmost_app) {
+        return None;
+    }
+    Some(frontmost_app)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn capture_insertion_target_app(_app: &AppHandle) -> Option<String> {
+    None
+}
+
 fn is_terminal_like_app(app_name: &str) -> bool {
     let lower = app_name.to_ascii_lowercase();
     ["terminal", "iterm", "warp", "wezterm", "alacritty", "kitty"]
@@ -1743,6 +1790,53 @@ fn is_terminal_like_app(app_name: &str) -> bool {
 #[cfg(target_os = "macos")]
 fn applescript_escape(input: &str) -> String {
     input.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+#[cfg(target_os = "macos")]
+fn activate_target_app(app: &AppHandle, target_app_name: Option<&str>) -> Result<(), AppError> {
+    let Some(target_app_name) = target_app_name else {
+        return Ok(());
+    };
+
+    if is_current_app_name(app, target_app_name) {
+        return Ok(());
+    }
+
+    if detect_frontmost_app_name()
+        .as_deref()
+        .is_some_and(|frontmost| app_names_match(frontmost, target_app_name))
+    {
+        return Ok(());
+    }
+
+    let output = Command::new("osascript")
+        .arg("-e")
+        .arg(format!(
+            "tell application \"{}\" to activate",
+            applescript_escape(target_app_name)
+        ))
+        .output()
+        .map_err(|e| AppError::Message(format!("Failed to reactivate target app: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(AppError::Message(format!(
+            "Failed to reactivate target app before paste. {}",
+            if stderr.is_empty() {
+                "Bring the destination app to the front and try again.".to_string()
+            } else {
+                stderr
+            }
+        )));
+    }
+
+    thread::sleep(Duration::from_millis(TARGET_APP_REFOCUS_DELAY_MS));
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn activate_target_app(_app: &AppHandle, _target_app_name: Option<&str>) -> Result<(), AppError> {
+    Ok(())
 }
 
 #[cfg(target_os = "macos")]
@@ -1791,13 +1885,25 @@ fn type_text_via_applescript(text: &str) -> Result<(), AppError> {
     Ok(())
 }
 
-fn paste_text(text: &str) -> Result<(), AppError> {
+fn paste_text(
+    app: &AppHandle,
+    text: &str,
+    insertion_target_app: Option<&str>,
+) -> Result<(), AppError> {
+    activate_target_app(app, insertion_target_app)?;
+
     #[cfg(target_os = "macos")]
-    if let Some(app_name) = detect_frontmost_app_name() {
-        if is_terminal_like_app(&app_name) {
-            if type_text_via_applescript(text).is_ok() {
-                return Ok(());
-            }
+    {
+        let target_is_terminal = insertion_target_app
+            .map(is_terminal_like_app)
+            .unwrap_or_else(|| {
+                detect_frontmost_app_name()
+                    .as_deref()
+                    .is_some_and(is_terminal_like_app)
+            });
+
+        if target_is_terminal && type_text_via_applescript(text).is_ok() {
+            return Ok(());
         }
     }
 
