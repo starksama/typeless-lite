@@ -72,6 +72,11 @@ function renderAccessibilityStatus(status: AccessibilityPermissionStatus): void 
   accessibilityStatusEl.textContent = `[${label}] ${status.guidance}`;
 }
 
+async function checkAndRenderAccessibilityStatus(): Promise<void> {
+  const permissionStatus = await invoke<AccessibilityPermissionStatus>('check_accessibility_permission');
+  renderAccessibilityStatus(permissionStatus);
+}
+
 async function loadInitial(): Promise<void> {
   const settings = await invoke<Settings>('get_settings');
   apiKeyInput.value = settings.api_key;
@@ -86,6 +91,13 @@ async function loadInitial(): Promise<void> {
 
   const status = await invoke<RuntimeStatus>('get_runtime_status');
   renderStatus(status);
+
+  accessibilityStatusEl.textContent = 'Checking Accessibility permission...';
+  try {
+    await checkAndRenderAccessibilityStatus();
+  } catch (error) {
+    accessibilityStatusEl.textContent = `Accessibility check failed: ${String(error)}`;
+  }
 }
 
 form.addEventListener('submit', async (event) => {
@@ -135,8 +147,7 @@ checkAccessibilityBtn.addEventListener('click', async () => {
   checkAccessibilityBtn.disabled = true;
   accessibilityStatusEl.textContent = 'Checking Accessibility permission...';
   try {
-    const permissionStatus = await invoke<AccessibilityPermissionStatus>('check_accessibility_permission');
-    renderAccessibilityStatus(permissionStatus);
+    await checkAndRenderAccessibilityStatus();
   } catch (error) {
     accessibilityStatusEl.textContent = `Accessibility check failed: ${String(error)}`;
   } finally {

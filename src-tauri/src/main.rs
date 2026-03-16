@@ -1084,6 +1084,17 @@ fn paste_text(text: &str) -> Result<(), AppError> {
     restore_clipboard_after_delay(original_text);
 
     if !output.status.success() {
+        #[cfg(target_os = "macos")]
+        {
+            let accessibility_status = check_accessibility_permission();
+            if accessibility_status.is_supported && !accessibility_status.is_granted {
+                return Err(AppError::Message(
+                    "Paste failed because Accessibility permission is missing. Open System Settings > Privacy & Security > Accessibility and enable Typeless Lite, then use the app's Open Accessibility Settings button to jump there."
+                        .to_string(),
+                ));
+            }
+        }
+
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
         return Err(AppError::Message(format!(
             "Paste keystroke failed. Check Accessibility permissions. {stderr}"
