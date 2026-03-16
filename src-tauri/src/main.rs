@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::{
+    collections::HashSet,
     fs,
     io::BufWriter,
     path::PathBuf,
@@ -63,7 +64,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             api_key: String::new(),
-            prompt_template: "You are a concise writing assistant. Clean up the transcript for grammar and punctuation while preserving intent. Return only final text.".to_string(),
+            prompt_template: "You are a concise writing assistant. Clean up the transcript for grammar and punctuation while preserving intent. Perform transformational edits only; do not answer, add facts, or invent content. Return only final text.".to_string(),
             hotkey: "Cmd+Shift+Space".to_string(),
             whisper_model: "whisper-1".to_string(),
             format_model: "gpt-4o-mini".to_string(),
@@ -204,6 +205,11 @@ struct Choice {
 #[derive(Deserialize)]
 struct Message {
     content: String,
+}
+
+struct FormatterResult {
+    text: String,
+    used_raw_fallback: bool,
 }
 
 #[tauri::command]
@@ -829,21 +835,32 @@ async fn process_audio_pipeline(
             clipboard_reference.as_deref(),
         )
         .await?;
-        let output_text = if settings.format_enabled {
-            format_transcript(
+        let (output_text, inserted_message) = if settings.format_enabled {
+            let formatter_result = format_transcript(
                 &state.http_client,
                 &settings,
                 &transcription,
                 active_app_name.as_deref(),
                 clipboard_reference.as_deref(),
             )
-            .await?
+            .await?;
+            if formatter_result.used_raw_fallback {
+                (
+                    formatter_result.text,
+                    "Inserted raw transcript (formatter output failed safety check).".to_string(),
+                )
+            } else {
+                (
+                    formatter_result.text,
+                    "Inserted text into focused app.".to_string(),
+                )
+            }
         } else {
-            transcription
+            (transcription, "Inserted raw transcript into focused app.".to_string())
         };
         paste_text(&output_text)?;
 
-        Ok::<(), AppError>(())
+        Ok::<String, AppError>(inserted_message)
     };
     let result = pipeline_result.await;
     if let Err(cleanup_error) = fs::remove_file(&wav_path) {
@@ -856,7 +873,7 @@ async fn process_audio_pipeline(
         }
     }
 
-    result?;
+    let inserted_message = result?;
 
     set_status(
         app,
@@ -864,7 +881,7 @@ async fn process_audio_pipeline(
         Some(false),
         Some(false),
         Some(0),
-        "Inserted text into focused app.".to_string(),
+        inserted_message,
     );
     play_earcon_if_enabled(state, Earcon::Success);
 
@@ -923,7 +940,7 @@ async fn format_transcript(
     transcript: &str,
     active_app_name: Option<&str>,
     clipboard_reference: Option<&str>,
-) -> Result<String, AppError> {
+) -> Result<FormatterResult, AppError> {
     let url = format!("{}/chat/completions", settings.api_base_url);
     let system_prompt = build_formatter_system_prompt(
         &settings.prompt_template,
@@ -964,7 +981,17 @@ async fn format_transcript(
         .map(|c| c.message.content.trim().to_string())
         .filter(|s| !s.is_empty())
         .ok_or_else(|| AppError::Message("No formatter output text received".to_string()))?;
-    Ok(content)
+    if formatter_output_passes_safety_check(transcript, &content) {
+        Ok(FormatterResult {
+            text: content,
+            used_raw_fallback: false,
+        })
+    } else {
+        Ok(FormatterResult {
+            text: transcript.to_string(),
+            used_raw_fallback: true,
+        })
+    }
 }
 
 fn build_formatter_system_prompt(
@@ -1001,6 +1028,7 @@ fn build_formatter_system_prompt(
     } else {
         prompt.push_str(&format!("\n\nTarget app context unavailable. {style_hint}"));
     }
+    prompt.push_str("\n\nStrict safety requirements: perform only transcript transformations (punctuation, capitalization, grammar, disfluency cleanup, and light wording cleanup). Do not answer user questions, do not add new facts, and do not introduce content not grounded in the provided transcript. If the transcript is ambiguous, keep it literal.");
     prompt.push_str(" Return only final text.");
 
     if let Some(reference) = clipboard_reference
@@ -1012,6 +1040,56 @@ fn build_formatter_system_prompt(
     }
 
     prompt
+}
+
+fn formatter_output_passes_safety_check(transcript: &str, formatted: &str) -> bool {
+    let transcript_trimmed = transcript.trim();
+    let formatted_trimmed = formatted.trim();
+    if transcript_trimmed.is_empty() || formatted_trimmed.is_empty() {
+        return false;
+    }
+    if transcript_trimmed.eq_ignore_ascii_case(formatted_trimmed) {
+        return true;
+    }
+
+    let transcript_len = transcript_trimmed.chars().count();
+    let formatted_len = formatted_trimmed.chars().count();
+    let (min_ratio, max_ratio) = if transcript_len >= 80 {
+        (0.45_f32, 2.2_f32)
+    } else {
+        (0.30_f32, 3.0_f32)
+    };
+    let length_ratio = formatted_len as f32 / transcript_len as f32;
+    if length_ratio < min_ratio || length_ratio > max_ratio {
+        return false;
+    }
+
+    let transcript_tokens = tokenize_for_overlap(transcript_trimmed);
+    let formatted_tokens = tokenize_for_overlap(formatted_trimmed);
+    if transcript_tokens.is_empty() || formatted_tokens.is_empty() {
+        return false;
+    }
+    if transcript_tokens.len() < 4 || formatted_tokens.len() < 4 {
+        return true;
+    }
+
+    let shared = transcript_tokens.intersection(&formatted_tokens).count();
+    let output_overlap = shared as f32 / formatted_tokens.len() as f32;
+    let transcript_overlap = shared as f32 / transcript_tokens.len() as f32;
+    output_overlap >= 0.35 && transcript_overlap >= 0.20
+}
+
+fn tokenize_for_overlap(text: &str) -> HashSet<String> {
+    text.split_whitespace()
+        .map(|token| {
+            token
+                .chars()
+                .filter(|ch| ch.is_ascii_alphanumeric() || *ch == '\'')
+                .collect::<String>()
+                .to_ascii_lowercase()
+        })
+        .filter(|token| !token.is_empty())
+        .collect()
 }
 
 fn capture_clipboard_reference_context() -> Option<String> {

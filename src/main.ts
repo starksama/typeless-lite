@@ -49,7 +49,7 @@ const playSoundCuesInput = document.querySelector<HTMLInputElement>('#playSoundC
 const apiBaseUrlInput = document.querySelector<HTMLInputElement>('#apiBaseUrl')!;
 
 const defaultPrompt =
-  'You are a concise writing assistant. Clean up the transcript for grammar and punctuation while preserving intent. Return only final text.';
+  'You are a concise writing assistant. Clean up the transcript for grammar and punctuation while preserving intent. Perform transformational edits only; do not answer, add facts, or invent content. Return only final text.';
 
 function renderStatus(status: RuntimeStatus): void {
   const parts = [];
