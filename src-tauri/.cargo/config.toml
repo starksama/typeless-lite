@@ -1,0 +1,2 @@
+[target.x86_64-apple-darwin]
+rustflags = ["--cfg", "no_zerocopy_simd_x86_avx12_1_89_0"]
