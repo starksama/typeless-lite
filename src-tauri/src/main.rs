@@ -112,6 +112,7 @@ fn play_earcon(_earcon: Earcon) {}
 struct RuntimeStatus {
     is_recording: bool,
     is_processing: bool,
+    mic_level: u8,
     last_message: String,
 }
 
@@ -137,6 +138,17 @@ struct RecorderSession {
     writer: Arc<Mutex<Option<hound::WavWriter<BufWriter<std::fs::File>>>>>,
     path: PathBuf,
     started_at: Instant,
+}
+
+#[derive(Clone)]
+struct MicMeterContext {
+    app: AppHandle,
+    meter: Arc<Mutex<MicMeterState>>,
+}
+
+struct MicMeterState {
+    last_emit_at: Instant,
+    smoothed_level: f32,
 }
 
 // cpal's CoreAudio stream type does not implement Send/Sync on macOS even though this app
@@ -207,6 +219,7 @@ fn get_runtime_status(state: State<AppState>) -> RuntimeStatus {
         .unwrap_or(RuntimeStatus {
             is_recording: false,
             is_processing: false,
+            mic_level: 0,
             last_message: "State unavailable".to_string(),
         })
 }
@@ -230,6 +243,7 @@ fn save_settings(app: AppHandle, state: State<AppState>, settings: Settings) -> 
     set_status(
         &app,
         &state,
+        None,
         None,
         None,
         format!("Settings saved. Hotkey: {}", settings.hotkey),
@@ -473,6 +487,7 @@ fn set_status(
     state: &State<AppState>,
     is_recording: Option<bool>,
     is_processing: Option<bool>,
+    mic_level: Option<u8>,
     message: String,
 ) {
     if let Ok(mut status) = state.runtime_status.lock() {
@@ -482,10 +497,26 @@ fn set_status(
         if let Some(v) = is_processing {
             status.is_processing = v;
         }
+        if let Some(v) = mic_level {
+            status.mic_level = v.min(100);
+        }
         status.last_message = message;
         update_tray_status(app, &status);
         let _ = app.emit(APP_STATUS_EVENT, status.clone());
     }
+}
+
+fn emit_mic_level(app: &AppHandle, mic_level: u8) {
+    let state: State<AppState> = app.state();
+    {
+        if let Ok(mut status) = state.runtime_status.lock() {
+            if !status.is_recording {
+                return;
+            }
+            status.mic_level = mic_level.min(100);
+            let _ = app.emit(APP_STATUS_EVENT, status.clone());
+        }
+    };
 }
 
 fn tray_state_label(status: &RuntimeStatus) -> &'static str {
@@ -541,13 +572,14 @@ fn toggle_recording_inner(app: &AppHandle, state: &State<AppState>) -> Result<()
         if lock.is_some() {
             lock.take()
         } else {
-            let session = start_recording().map_err(|e| e.to_string())?;
+            let session = start_recording(app).map_err(|e| e.to_string())?;
             *lock = Some(session);
             set_status(
                 app,
                 state,
                 Some(true),
                 Some(false),
+                Some(0),
                 "Recording... release hotkey to stop (or toggle manually).".to_string(),
             );
             play_earcon_if_enabled(state, Earcon::Start);
@@ -564,6 +596,7 @@ fn toggle_recording_inner(app: &AppHandle, state: &State<AppState>) -> Result<()
                 state,
                 Some(false),
                 Some(false),
+                Some(0),
                 "Recording too short — hold hotkey and speak longer.".to_string(),
             );
             play_earcon_if_enabled(state, Earcon::Error);
@@ -575,6 +608,7 @@ fn toggle_recording_inner(app: &AppHandle, state: &State<AppState>) -> Result<()
             state,
             Some(false),
             Some(true),
+            Some(0),
             "Transcribing and formatting...".to_string(),
         );
 
@@ -587,6 +621,7 @@ fn toggle_recording_inner(app: &AppHandle, state: &State<AppState>) -> Result<()
                     &app_state,
                     Some(false),
                     Some(false),
+                    Some(0),
                     format!("Failed: {err}"),
                 );
                 play_earcon_if_enabled(&app_state, Earcon::Error);
@@ -597,7 +632,7 @@ fn toggle_recording_inner(app: &AppHandle, state: &State<AppState>) -> Result<()
     Ok(())
 }
 
-fn start_recording() -> Result<RecorderSession, AppError> {
+fn start_recording(app: &AppHandle) -> Result<RecorderSession, AppError> {
     let host = cpal::default_host();
     let device = host
         .default_input_device()
@@ -625,27 +660,36 @@ fn start_recording() -> Result<RecorderSession, AppError> {
     let writer = hound::WavWriter::create(&path, spec)
         .map_err(|e| AppError::Message(format!("Failed creating WAV file: {e}")))?;
     let writer = Arc::new(Mutex::new(Some(writer)));
+    let mic_meter = MicMeterContext {
+        app: app.clone(),
+        meter: Arc::new(Mutex::new(MicMeterState {
+            last_emit_at: Instant::now(),
+            smoothed_level: 0.0,
+        })),
+    };
 
     let err_fn = |err| {
         eprintln!("Audio stream error: {err}");
     };
 
     let writer_clone = writer.clone();
+    let meter_clone = mic_meter.clone();
     let stream = match supported_config.sample_format() {
         cpal::SampleFormat::F32 => device
             .build_input_stream(
                 &config,
-                move |data: &[f32], _| write_samples_f32(data, &writer_clone),
+                move |data: &[f32], _| write_samples_f32(data, &writer_clone, &meter_clone),
                 err_fn,
                 None,
             )
             .map_err(|e| AppError::Message(format!("Failed building f32 stream: {e}")))?,
         cpal::SampleFormat::I16 => {
             let writer_clone = writer.clone();
+            let meter_clone = mic_meter.clone();
             device
                 .build_input_stream(
                     &config,
-                    move |data: &[i16], _| write_samples_i16(data, &writer_clone),
+                    move |data: &[i16], _| write_samples_i16(data, &writer_clone, &meter_clone),
                     err_fn,
                     None,
                 )
@@ -653,10 +697,11 @@ fn start_recording() -> Result<RecorderSession, AppError> {
         }
         cpal::SampleFormat::U16 => {
             let writer_clone = writer.clone();
+            let meter_clone = mic_meter.clone();
             device
                 .build_input_stream(
                     &config,
-                    move |data: &[u16], _| write_samples_u16(data, &writer_clone),
+                    move |data: &[u16], _| write_samples_u16(data, &writer_clone, &meter_clone),
                     err_fn,
                     None,
                 )
@@ -684,43 +729,71 @@ fn start_recording() -> Result<RecorderSession, AppError> {
 fn write_samples_f32(
     input: &[f32],
     writer: &Arc<Mutex<Option<hound::WavWriter<BufWriter<std::fs::File>>>>>,
+    mic_meter: &MicMeterContext,
 ) {
+    let mut peak = 0.0_f32;
     if let Ok(mut lock) = writer.lock() {
         if let Some(w) = lock.as_mut() {
             for sample in input {
                 let clamped = sample.clamp(-1.0, 1.0);
+                peak = peak.max(clamped.abs());
                 let s = (clamped * i16::MAX as f32) as i16;
                 let _ = w.write_sample(s);
             }
         }
     }
+    maybe_emit_mic_level((peak * 100.0).round() as u8, mic_meter);
 }
 
 fn write_samples_i16(
     input: &[i16],
     writer: &Arc<Mutex<Option<hound::WavWriter<BufWriter<std::fs::File>>>>>,
+    mic_meter: &MicMeterContext,
 ) {
+    let mut peak = 0_i32;
     if let Ok(mut lock) = writer.lock() {
         if let Some(w) = lock.as_mut() {
             for sample in input {
+                peak = peak.max((*sample as i32).unsigned_abs() as i32);
                 let _ = w.write_sample(*sample);
             }
         }
     }
+    let level = ((peak as f32 / i16::MAX as f32) * 100.0).round() as u8;
+    maybe_emit_mic_level(level, mic_meter);
 }
 
 fn write_samples_u16(
     input: &[u16],
     writer: &Arc<Mutex<Option<hound::WavWriter<BufWriter<std::fs::File>>>>>,
+    mic_meter: &MicMeterContext,
 ) {
+    let mut peak = 0_i32;
     if let Ok(mut lock) = writer.lock() {
         if let Some(w) = lock.as_mut() {
             for sample in input {
                 let shifted = (*sample as i32 - 32768) as i16;
+                peak = peak.max((shifted as i32).unsigned_abs() as i32);
                 let _ = w.write_sample(shifted);
             }
         }
     }
+    let level = ((peak as f32 / i16::MAX as f32) * 100.0).round() as u8;
+    maybe_emit_mic_level(level, mic_meter);
+}
+
+fn maybe_emit_mic_level(level: u8, mic_meter: &MicMeterContext) {
+    let Ok(mut state) = mic_meter.meter.lock() else {
+        return;
+    };
+
+    let now = Instant::now();
+    state.smoothed_level = (state.smoothed_level * 0.65) + ((level.min(100) as f32) * 0.35);
+    if now.duration_since(state.last_emit_at) < Duration::from_millis(75) {
+        return;
+    }
+    state.last_emit_at = now;
+    emit_mic_level(&mic_meter.app, state.smoothed_level.round() as u8);
 }
 
 async fn process_audio_pipeline(
@@ -786,6 +859,7 @@ async fn process_audio_pipeline(
         state,
         Some(false),
         Some(false),
+        Some(0),
         "Inserted text into focused app.".to_string(),
     );
     play_earcon_if_enabled(state, Earcon::Success);
@@ -1083,6 +1157,7 @@ fn main() {
                 runtime_status: Mutex::new(RuntimeStatus {
                     is_recording: false,
                     is_processing: false,
+                    mic_level: 0,
                     last_message: "Ready".to_string(),
                 }),
                 recorder: Mutex::new(None),

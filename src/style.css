@@ -91,6 +91,30 @@ button:disabled {
   font-weight: 600;
 }
 
+.meter-row {
+  margin-top: 10px;
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  color: #3d4a5d;
+}
+
+.meter-track {
+  margin-top: 6px;
+  width: 100%;
+  height: 10px;
+  background: #e3ebf6;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+#mic-level-bar {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #18a958 0%, #7bbf1b 45%, #d78c1d 75%, #c23f2b 100%);
+  transition: width 70ms linear;
+}
+
 .hint {
   margin-top: 12px;
   color: #3d4a5d;

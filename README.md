@@ -61,6 +61,7 @@ This MVP implements exactly that flow on macOS with Tauri and minimal UI.
 - minimal settings UI for API key, prompt template, hotkey, models, base URL
 - settings persisted to app config dir JSON
 - status events pushed to UI for user feedback
+- live mic activity meter (0-100) in Settings status panel while recording
 
 ## Project Layout
 

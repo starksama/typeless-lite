@@ -17,6 +17,7 @@ type Settings = {
 type RuntimeStatus = {
   is_recording: boolean;
   is_processing: boolean;
+  mic_level: number;
   last_message: string;
 };
 
@@ -29,6 +30,8 @@ type AccessibilityPermissionStatus = {
 };
 
 const statusEl = document.querySelector<HTMLParagraphElement>('#status')!;
+const micLevelValueEl = document.querySelector<HTMLSpanElement>('#mic-level-value')!;
+const micLevelBarEl = document.querySelector<HTMLDivElement>('#mic-level-bar')!;
 const accessibilityStatusEl = document.querySelector<HTMLParagraphElement>('#accessibility-status')!;
 const form = document.querySelector<HTMLFormElement>('#settings-form')!;
 const toggleBtn = document.querySelector<HTMLButtonElement>('#toggle-btn')!;
@@ -54,6 +57,10 @@ function renderStatus(status: RuntimeStatus): void {
   if (status.is_processing) parts.push('Processing');
   const state = parts.length ? parts.join(' + ') : 'Idle';
   statusEl.textContent = `${state}: ${status.last_message}`;
+
+  const level = Math.max(0, Math.min(100, Math.round(status.mic_level || 0)));
+  micLevelValueEl.textContent = status.is_recording ? `${level}%` : '0%';
+  micLevelBarEl.style.width = `${status.is_recording ? level : 0}%`;
 }
 
 function renderAccessibilityStatus(status: AccessibilityPermissionStatus): void {
