@@ -1,6 +1,6 @@
 # Typeless Lite (Tauri MVP)
 
-A tiny mac desktop app inspired by Typeless: hold a global hotkey, speak, transcribe with Whisper, run an LLM formatting pass, then paste into the currently focused app.
+A tiny mac desktop app inspired by Typeless: use a global hotkey, speak, transcribe with Whisper, run an LLM formatting pass, then paste into the currently focused app.
 
 ## What Typeless Does (Research Summary)
 
@@ -48,7 +48,9 @@ This MVP implements exactly that flow on macOS with Tauri and minimal UI.
 ## MVP Scope Implemented
 
 - mac desktop first (Tauri v2 scaffold)
-- global hotkey hold-to-talk (press to start, release to stop)
+- global hotkey recording with two modes:
+  - `hold` (hold to record, release to stop)
+  - `toggle` (press once to start, press again to stop)
 - WAV recording from default input device
 - transcription via `/v1/audio/transcriptions`
 - LLM formatting pass via `/v1/chat/completions`
@@ -58,7 +60,9 @@ This MVP implements exactly that flow on macOS with Tauri and minimal UI.
 - paste into focused app using clipboard + `Cmd+V` fallback path
 - paste is non-destructive for text clipboard contents (restored shortly after simulated `Cmd+V`)
 - tray menu for open/toggle/quit
-- minimal settings UI for API key, prompt template, hotkey, models, base URL
+- modern desktop UI with sidebar nav, top quick-status chips, recording control card, and grouped settings sections
+- upgraded hotkey UX with active-hotkey display, quick preset buttons, and inline validation messages
+- transcription language selector (`auto` by default) with explicit language override support
 - settings persisted to app config dir JSON
 - status events pushed to UI for user feedback
 - live mic activity meter (0-100) in Settings status panel while recording
@@ -122,6 +126,12 @@ Open the app window and configure:
 - `Include clipboard context for formatter` (on by default; when enabled, clipboard text may be sent as optional context during formatting)
 - `Play subtle sound cues` (on by default; start/success/error earcons on macOS)
 - `Global Hotkey` (default `Cmd+Shift+Space`)
+- `Recording Mode`
+  - `hold` (default): press and hold hotkey to record; release to stop
+  - `toggle`: press hotkey once to start; press again to stop
+- `Transcription Language` (default `auto`)
+  - `auto` omits the `language` field on the Whisper request for auto-detection
+  - explicit values include `en`, `zh`, `zh-TW`, `ja`, `ko`, `es`, `fr`, `de`
 - `Prompt Template` (base formatting instruction; runtime context hints are appended automatically)
 
 Transcription prompt behavior:
@@ -135,7 +145,3 @@ Transcription prompt behavior:
 - Optional custom vocabulary is persisted in local settings and sent only as transcription guidance.
 - No secrets are hardcoded.
 - `.env.example` is provided only as a template.
-
-## Known Gaps in This Environment
-
-The current execution environment could not access package registries (DNS/network restricted), so dependency installation and full compile/run were blocked here. See final status summary for exact commands and failures.

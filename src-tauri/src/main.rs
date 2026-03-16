@@ -32,6 +32,8 @@ const TERMINAL_TYPE_CHUNK_SIZE: usize = 80;
 const MIN_RECORDING_MS: u128 = 400;
 const API_TEST_TIMEOUT_SECS: u64 = 6;
 const API_CLIENT_TIMEOUT_SECS: u64 = 30;
+const TRANSCRIPT_HISTORY_LIMIT: usize = 20;
+const TRANSCRIPT_HISTORY_EVENT: &str = "transcript-history-updated";
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct Settings {
@@ -51,6 +53,10 @@ struct Settings {
     #[serde(default = "default_play_sound_cues")]
     play_sound_cues: bool,
     api_base_url: String,
+    #[serde(default = "default_recording_mode")]
+    recording_mode: String,
+    #[serde(default = "default_transcription_language")]
+    language: String,
 }
 
 fn default_format_enabled() -> bool {
@@ -73,6 +79,14 @@ fn default_custom_vocabulary() -> String {
     String::new()
 }
 
+fn default_recording_mode() -> String {
+    "hold".to_string()
+}
+
+fn default_transcription_language() -> String {
+    "auto".to_string()
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -87,6 +101,8 @@ impl Default for Settings {
             include_clipboard_context: true,
             play_sound_cues: true,
             api_base_url: "https://api.openai.com/v1".to_string(),
+            recording_mode: default_recording_mode(),
+            language: default_transcription_language(),
         }
     }
 }
@@ -125,6 +141,14 @@ fn play_earcon(earcon: Earcon) {
 #[cfg(not(target_os = "macos"))]
 fn play_earcon(_earcon: Earcon) {}
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct TranscriptHistoryEntry {
+    id: u64,
+    created_at_ms: u64,
+    text: String,
+    source: String,
+}
+
 #[derive(Debug, Serialize, Clone)]
 struct RuntimeStatus {
     is_recording: bool,
@@ -148,6 +172,7 @@ struct AppState {
     recorder: Mutex<Option<RecorderSession>>,
     current_shortcut: Mutex<Option<Shortcut>>,
     http_client: reqwest::Client,
+    transcript_history: Mutex<Vec<TranscriptHistoryEntry>>,
 }
 
 struct RecorderSession {
@@ -247,28 +272,72 @@ fn get_runtime_status(state: State<AppState>) -> RuntimeStatus {
 }
 
 #[tauri::command]
+fn get_transcript_history(state: State<AppState>) -> Vec<TranscriptHistoryEntry> {
+    state
+        .transcript_history
+        .lock()
+        .map(|entries| entries.clone())
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+fn clear_transcript_history(app: AppHandle, state: State<AppState>) -> Result<(), String> {
+    {
+        let mut entries = state
+            .transcript_history
+            .lock()
+            .map_err(|_| "Failed to lock transcript history".to_string())?;
+        entries.clear();
+    }
+    persist_transcript_history(&app, &[]).map_err(|e| e.to_string())?;
+    emit_transcript_history(&app, &state);
+    Ok(())
+}
+
+#[tauri::command]
+fn copy_text_to_clipboard(text: String) -> Result<(), String> {
+    let mut clipboard =
+        arboard::Clipboard::new().map_err(|e| format!("Failed to open clipboard: {e}"))?;
+    clipboard
+        .set_text(text)
+        .map_err(|e| format!("Failed to set clipboard text: {e}"))
+}
+
+#[tauri::command]
 fn save_settings(app: AppHandle, state: State<AppState>, settings: Settings) -> Result<(), String> {
-    if settings.hotkey.trim().is_empty() {
+    let normalized_hotkey = settings.hotkey.trim().to_string();
+    if normalized_hotkey.is_empty() {
         return Err("Hotkey cannot be empty".to_string());
     }
+    let normalized_mode = normalize_recording_mode(&settings.recording_mode);
+    let normalized_language = normalize_transcription_language(&settings.language);
+    let mut normalized_settings = settings.clone();
+    normalized_settings.hotkey = normalized_hotkey.clone();
+    normalized_settings.recording_mode = normalized_mode.clone();
+    normalized_settings.language = normalized_language.clone();
 
     {
         let mut lock = state
             .settings
             .lock()
             .map_err(|_| "Failed to lock settings".to_string())?;
-        *lock = settings.clone();
+        *lock = normalized_settings.clone();
     }
 
-    persist_settings(&app, &settings).map_err(|e| e.to_string())?;
-    register_shortcut(&app, &state, &settings.hotkey)?;
+    persist_settings(&app, &normalized_settings).map_err(|e| e.to_string())?;
+    register_shortcut(&app, &state, &normalized_settings.hotkey)?;
     set_status(
         &app,
         &state,
         None,
         None,
         None,
-        format!("Settings saved. Hotkey: {}", settings.hotkey),
+        format!(
+            "Settings saved. Hotkey: {} | Mode: {} | Language: {}",
+            normalized_settings.hotkey,
+            recording_mode_label(&normalized_settings.recording_mode),
+            transcription_language_label(&normalized_settings.language),
+        ),
     );
     Ok(())
 }
@@ -478,6 +547,86 @@ fn persist_settings(app: &AppHandle, settings: &Settings) -> Result<(), AppError
     Ok(())
 }
 
+fn transcript_history_path(app: &AppHandle) -> Result<PathBuf, AppError> {
+    let dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|e| AppError::Message(format!("Failed resolving config dir: {e}")))?;
+    fs::create_dir_all(&dir)?;
+    Ok(dir.join("transcript_history.json"))
+}
+
+fn load_transcript_history(app: &AppHandle) -> Vec<TranscriptHistoryEntry> {
+    let Ok(path) = transcript_history_path(app) else {
+        return Vec::new();
+    };
+    if !path.exists() {
+        return Vec::new();
+    }
+    let Ok(text) = fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    serde_json::from_str(&text).unwrap_or_default()
+}
+
+fn persist_transcript_history(
+    app: &AppHandle,
+    entries: &[TranscriptHistoryEntry],
+) -> Result<(), AppError> {
+    let path = transcript_history_path(app)?;
+    let data = serde_json::to_string_pretty(entries)?;
+    fs::write(path, data)?;
+    Ok(())
+}
+
+fn emit_transcript_history(app: &AppHandle, state: &State<'_, AppState>) {
+    let payload = state
+        .transcript_history
+        .lock()
+        .map(|entries| entries.clone())
+        .unwrap_or_default();
+    let _ = app.emit(TRANSCRIPT_HISTORY_EVENT, payload);
+}
+
+fn push_transcript_history_entry(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    text: &str,
+    source: &str,
+) {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+
+    let snapshot = {
+        let Ok(mut entries) = state.transcript_history.lock() else {
+            return;
+        };
+        entries.insert(
+            0,
+            TranscriptHistoryEntry {
+                id: now_ms,
+                created_at_ms: now_ms,
+                text: trimmed.to_string(),
+                source: source.to_string(),
+            },
+        );
+        entries.truncate(TRANSCRIPT_HISTORY_LIMIT);
+        entries.clone()
+    };
+
+    if let Err(error) = persist_transcript_history(app, &snapshot) {
+        eprintln!("Failed to persist transcript history: {error}");
+    }
+    emit_transcript_history(app, state);
+}
+
 fn map_test_connection_error(error: reqwest::Error) -> String {
     if error.is_timeout() {
         return format!(
@@ -502,6 +651,58 @@ fn summarize_http_body(body: &str) -> String {
     }
     let snippet: String = trimmed.chars().take(MAX_CHARS).collect();
     format!("{snippet}...")
+}
+
+fn normalize_recording_mode(mode: &str) -> String {
+    if mode.trim().eq_ignore_ascii_case("toggle") {
+        "toggle".to_string()
+    } else {
+        "hold".to_string()
+    }
+}
+
+fn recording_mode_label(mode: &str) -> &'static str {
+    if mode.eq_ignore_ascii_case("toggle") {
+        "Toggle start/stop"
+    } else {
+        "Hold to record"
+    }
+}
+
+fn normalize_transcription_language(language: &str) -> String {
+    let normalized = language.trim();
+    const ALLOWED_LANGUAGES: [&str; 9] =
+        ["auto", "en", "zh", "zh-TW", "ja", "ko", "es", "fr", "de"];
+    if ALLOWED_LANGUAGES
+        .iter()
+        .any(|allowed| allowed.eq_ignore_ascii_case(normalized))
+    {
+        if normalized.eq_ignore_ascii_case("zh-tw") {
+            "zh-TW".to_string()
+        } else {
+            normalized.to_ascii_lowercase()
+        }
+    } else {
+        "auto".to_string()
+    }
+}
+
+fn transcription_language_label(language: &str) -> &'static str {
+    match language {
+        "en" => "English (en)",
+        "zh" => "Chinese Simplified (zh)",
+        "zh-TW" => "Chinese Traditional (zh-TW)",
+        "ja" => "Japanese (ja)",
+        "ko" => "Korean (ko)",
+        "es" => "Spanish (es)",
+        "fr" => "French (fr)",
+        "de" => "German (de)",
+        _ => "Auto",
+    }
+}
+
+fn is_toggle_mode(settings: &Settings) -> bool {
+    settings.recording_mode.eq_ignore_ascii_case("toggle")
 }
 
 fn set_status(
@@ -594,16 +795,22 @@ fn toggle_recording_inner(app: &AppHandle, state: &State<AppState>) -> Result<()
         if lock.is_some() {
             lock.take()
         } else {
+            let mode_hint = state
+                .settings
+                .lock()
+                .map(|settings| {
+                    if is_toggle_mode(&settings) {
+                        "Recording... press hotkey again to stop (or toggle manually).".to_string()
+                    } else {
+                        "Recording... release hotkey to stop (or toggle manually).".to_string()
+                    }
+                })
+                .unwrap_or_else(|_| {
+                    "Recording... release hotkey to stop (or toggle manually).".to_string()
+                });
             let session = start_recording(app).map_err(|e| e.to_string())?;
             *lock = Some(session);
-            set_status(
-                app,
-                state,
-                Some(true),
-                Some(false),
-                Some(0),
-                "Recording... release hotkey to stop (or toggle manually).".to_string(),
-            );
+            set_status(app, state, Some(true), Some(false), Some(0), mode_hint);
             play_earcon_if_enabled(state, Earcon::Start);
             return Ok(());
         }
@@ -888,7 +1095,7 @@ async fn process_audio_pipeline(
         };
         paste_text(&output_text)?;
 
-        Ok::<String, AppError>(inserted_message)
+        Ok::<(String, String), AppError>((inserted_message, output_text))
     };
     let result = pipeline_result.await;
     if let Err(cleanup_error) = fs::remove_file(&wav_path) {
@@ -901,7 +1108,8 @@ async fn process_audio_pipeline(
         }
     }
 
-    let inserted_message = result?;
+    let (inserted_message, output_text) = result?;
+    push_transcript_history_entry(app, state, &output_text, "dictation");
 
     set_status(
         app,
@@ -933,6 +1141,10 @@ async fn transcribe_audio(
                 .map_err(|e| AppError::Message(format!("MIME error: {e}")))?,
         )
         .text("model", settings.whisper_model.clone());
+    let transcription_language = normalize_transcription_language(&settings.language);
+    if transcription_language != "auto" {
+        form = form.text("language", transcription_language);
+    }
     if let Some(prompt) =
         build_transcription_prompt(settings.custom_vocabulary.as_str(), clipboard_reference)
     {
@@ -1360,14 +1572,27 @@ fn main() {
 
                     if shortcut == &active_shortcut {
                         let is_recording = state.recorder.lock().ok().is_some_and(|r| r.is_some());
-                        match event.state {
-                            ShortcutState::Pressed if !is_recording => {
-                                let _ = toggle_recording_inner(app, &state);
+                        let mode = state
+                            .settings
+                            .lock()
+                            .map(|settings| normalize_recording_mode(&settings.recording_mode))
+                            .unwrap_or_else(|_| default_recording_mode());
+
+                        match mode.as_str() {
+                            "toggle" => {
+                                if event.state == ShortcutState::Pressed {
+                                    let _ = toggle_recording_inner(app, &state);
+                                }
                             }
-                            ShortcutState::Released if is_recording => {
-                                let _ = toggle_recording_inner(app, &state);
-                            }
-                            _ => {}
+                            _ => match event.state {
+                                ShortcutState::Pressed if !is_recording => {
+                                    let _ = toggle_recording_inner(app, &state);
+                                }
+                                ShortcutState::Released if is_recording => {
+                                    let _ = toggle_recording_inner(app, &state);
+                                }
+                                _ => {}
+                            },
                         }
                     }
                 })
@@ -1380,6 +1605,7 @@ fn main() {
                 .build()
                 .map_err(|e| Box::<dyn std::error::Error>::from(e.to_string()))?;
 
+            let transcript_history = load_transcript_history(app.handle());
             let state = AppState {
                 settings: Mutex::new(settings.clone()),
                 runtime_status: Mutex::new(RuntimeStatus {
@@ -1391,12 +1617,14 @@ fn main() {
                 recorder: Mutex::new(None),
                 current_shortcut: Mutex::new(None),
                 http_client,
+                transcript_history: Mutex::new(transcript_history),
             };
             app.manage(state);
 
             let app_state: State<AppState> = app.state();
             register_shortcut(app.handle(), &app_state, &settings.hotkey)
                 .map_err(|e| Box::<dyn std::error::Error>::from(e.to_string()))?;
+            emit_transcript_history(app.handle(), &app_state);
 
             let open_item = MenuItem::with_id(app, "open", "Open Settings", true, None::<&str>)?;
             let toggle_item =
@@ -1432,6 +1660,9 @@ fn main() {
             get_settings,
             save_settings,
             get_runtime_status,
+            get_transcript_history,
+            clear_transcript_history,
+            copy_text_to_clipboard,
             toggle_recording,
             test_api_connection,
             check_accessibility_permission,
