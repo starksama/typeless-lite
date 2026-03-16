@@ -26,6 +26,7 @@ const PRE_PASTE_DELAY_MS: u64 = 60;
 const PASTE_RETRY_BACKOFF_MS: u64 = 45;
 const CLIPBOARD_RESTORE_DELAY_MS: u64 = 300;
 const FORMAT_CONTEXT_CLIPBOARD_MAX_CHARS: usize = 500;
+const TERMINAL_TYPE_CHUNK_SIZE: usize = 80;
 const MIN_RECORDING_MS: u128 = 400;
 const API_TEST_TIMEOUT_SECS: u64 = 6;
 const API_CLIENT_TIMEOUT_SECS: u64 = 30;
@@ -1046,7 +1047,76 @@ fn detect_frontmost_app_name() -> Option<String> {
     None
 }
 
+fn is_terminal_like_app(app_name: &str) -> bool {
+    let lower = app_name.to_ascii_lowercase();
+    ["terminal", "iterm", "warp", "wezterm", "alacritty", "kitty"]
+        .iter()
+        .any(|needle| lower.contains(needle))
+}
+
+#[cfg(target_os = "macos")]
+fn applescript_escape(input: &str) -> String {
+    input
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+}
+
+#[cfg(target_os = "macos")]
+fn type_text_via_applescript(text: &str) -> Result<(), AppError> {
+    let mut script_lines = vec!["tell application \"System Events\"".to_string()];
+    let lines: Vec<&str> = text.split('\n').collect();
+
+    for (line_index, line) in lines.iter().enumerate() {
+        let mut chunk = String::new();
+        let mut chunk_len = 0usize;
+
+        for ch in line.chars() {
+            chunk.push(ch);
+            chunk_len += 1;
+            if chunk_len >= TERMINAL_TYPE_CHUNK_SIZE {
+                script_lines.push(format!("keystroke \"{}\"", applescript_escape(&chunk)));
+                chunk.clear();
+                chunk_len = 0;
+            }
+        }
+
+        if !chunk.is_empty() {
+            script_lines.push(format!("keystroke \"{}\"", applescript_escape(&chunk)));
+        }
+
+        if line_index + 1 < lines.len() {
+            script_lines.push("key code 36".to_string());
+        }
+    }
+
+    script_lines.push("end tell".to_string());
+
+    let output = Command::new("osascript")
+        .arg("-e")
+        .arg(script_lines.join("\n"))
+        .output()
+        .map_err(|e| AppError::Message(format!("Failed to run osascript typing fallback: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        return Err(AppError::Message(format!(
+            "Terminal typing fallback failed. Check Accessibility permissions. {stderr}"
+        )));
+    }
+
+    Ok(())
+}
+
 fn paste_text(text: &str) -> Result<(), AppError> {
+    #[cfg(target_os = "macos")]
+    if let Some(app_name) = detect_frontmost_app_name() {
+        if is_terminal_like_app(&app_name) {
+            if type_text_via_applescript(text).is_ok() {
+                return Ok(());
+            }
+        }
+    }
+
     let mut clipboard =
         arboard::Clipboard::new().map_err(|e| AppError::Message(format!("Clipboard: {e}")))?;
     let original_text = match clipboard.get_text() {
