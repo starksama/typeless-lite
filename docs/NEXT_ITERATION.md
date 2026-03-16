@@ -1,3 +1,3 @@
 1. Add bounded retry/backoff plus explicit restore CTA for draft-recovery failures (reliability hardening). Success criteria: simulated 429/5xx paths retry safely and keep single-paste behavior with recoverable draft still intact.
-2. Add editable custom fallback list for hotkey preflight conflicts (hotkey UX). Success criteria: users can override/add conflict mappings and still get one-click preset suggestions before save.
-3. Add history export destination picker + success/open-folder affordance (history UX). Success criteria: users can choose save location before export and confirm file path after save.
+2. Add history export destination picker + success/open-folder affordance (history UX). Success criteria: users can choose save location before export and confirm file path after save.
+3. Add import/export for custom hotkey conflict mappings (hotkey UX). Success criteria: users can back up and restore custom fallback mappings across machines without editing raw local storage.

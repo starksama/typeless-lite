@@ -246,6 +246,21 @@
                 <p class="hint">Click edit, press a shortcut once, and press Esc to cancel capture.</p>
                 <p id="hotkey-validation" class="field-message" role="status" aria-live="polite"></p>
                 <button id="hotkey-suggestion-btn" type="button" class="ui-button ui-button-secondary hidden">Use suggested fallback</button>
+                <label class="ui-field hotkey-fallback-mappings-field">
+                  <span class="ui-label">Custom Conflict Fallback Mappings</span>
+                  <textarea
+                    id="hotkey-fallback-mappings"
+                    class="ui-input hotkey-fallback-mappings-input"
+                    rows="4"
+                    placeholder="Cmd+Space => Cmd+Option+Space | Avoid Spotlight conflict"
+                  ></textarea>
+                </label>
+                <p class="hint">One mapping per line: RequestedHotkey =&gt; FallbackHotkey | Optional reason. Custom mappings override defaults.</p>
+                <div class="buttons">
+                  <button id="hotkey-fallback-mappings-save-btn" type="button" class="ui-button ui-button-secondary">Save custom mappings</button>
+                  <button id="hotkey-fallback-mappings-reset-btn" type="button" class="ui-button ui-button-secondary">Reset custom mappings</button>
+                </div>
+                <p id="hotkey-fallback-mappings-status" class="field-message" role="status" aria-live="polite"></p>
               </div>
 
               <div class="setting-group">
