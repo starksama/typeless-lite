@@ -99,7 +99,7 @@ pre {
 }
 
 .app-shell {
-  --sidebar-width: 214px;
+  --sidebar-width: 196px;
   position: relative;
   z-index: 1;
   width: 100%;
@@ -166,7 +166,7 @@ pre {
   gap: 16px;
   height: 100%;
   min-height: 0;
-  padding: 10px 10px 10px 6px;
+  padding: 8px 8px 8px 4px;
   border: 0;
   border-radius: 0;
   background: transparent;
@@ -232,9 +232,9 @@ pre {
   width: 100%;
   display: grid;
   grid-template-columns: 28px minmax(0, 1fr);
-  gap: 10px;
+  gap: 8px;
   align-items: center;
-  padding: 8px 10px;
+  padding: 7px 8px;
   border: 1px solid transparent;
   border-radius: 10px;
   background: transparent;
@@ -1442,11 +1442,11 @@ textarea.ui-input:focus,
 }
 
 .app-shell.sidebar-collapsed {
-  --sidebar-width: 76px;
+  --sidebar-width: 68px;
 }
 
 .app-shell.sidebar-collapsed .sidebar-surface {
-  padding-inline: 10px 6px;
+  padding-inline: 8px 4px;
 }
 
 .app-shell.sidebar-collapsed .brand-lockup {
@@ -1465,7 +1465,7 @@ textarea.ui-input:focus,
   grid-template-columns: 28px 0fr;
   justify-content: center;
   gap: 0;
-  padding-inline: 10px;
+  padding-inline: 8px;
 }
 
 .app-shell.sidebar-collapsed .sidebar-footer .icon-button {

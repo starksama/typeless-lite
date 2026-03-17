@@ -96,6 +96,7 @@ Rules:
 - active tab must not become materially taller than inactive tabs
 - collapse/expand should animate smoothly, not snap
 - avoid decorative icons or oversized icon containers
+- trim sidebar edge padding aggressively; the rail should feel dense and space-efficient, especially in collapsed mode
 - the collapsed state should hide copy without causing obvious layout jitter
 - the sidebar bottom controls should stay pinned to the bottom in both expanded and collapsed states
 - the sidebar collapse control should be compact and icon-led; avoid extra explanatory text there
