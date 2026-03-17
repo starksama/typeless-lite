@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { APP_BRAND } from './app-config';
 
 type RecordingMode = 'hold' | 'toggle';
 type TranscriptionLanguage = 'auto' | 'en' | 'zh' | 'zh-TW' | 'ja' | 'ko' | 'es' | 'fr' | 'de';
@@ -7,7 +8,8 @@ type TranscriptionLanguage = 'auto' | 'en' | 'zh' | 'zh-TW' | 'ja' | 'ko' | 'es'
 type Settings = {
   api_key: string;
   prompt_template: string;
-  hotkey: string;
+  hold_hotkey: string;
+  toggle_hotkey: string;
   whisper_model: string;
   custom_vocabulary: string;
   format_model: string;
@@ -60,10 +62,28 @@ type DurableDraft = {
   source_app?: string | null;
 };
 
+type HistoryDayGroup = {
+  key: string;
+  label: string;
+  entries: TranscriptHistoryEntry[];
+};
+
 type WorkspaceTab = 'home' | 'dictation' | 'history' | 'settings';
 type OnboardingStepId = 'welcome' | 'permissions' | 'api' | 'quick-setup' | 'finish';
-type HotkeyCaptureTarget = 'settings' | 'onboarding';
+type ShortcutSlot = 'hold' | 'toggle';
+type HotkeyCaptureTarget = 'settings-hold' | 'settings-toggle' | 'onboarding';
 type SettingsSection = 'general' | 'shortcuts' | 'ai' | 'privacy';
+type StatusBannerTone = 'ready' | 'recording' | 'processing' | 'issue';
+type AppToastTone = 'success' | 'error';
+type TranscriptRowActionMode = 'button' | 'indicator';
+
+const PLATFORM_LABEL_SOURCE =
+  (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform ||
+  navigator.platform ||
+  navigator.userAgent;
+const PLATFORM_IS_MAC = /mac|iphone|ipad|ipod/i.test(PLATFORM_LABEL_SOURCE);
+
+document.body.classList.toggle('platform-mac', PLATFORM_IS_MAC);
 
 const LANGUAGE_LABELS: Record<TranscriptionLanguage, string> = {
   auto: 'Auto',
@@ -80,67 +100,74 @@ const LANGUAGE_LABELS: Record<TranscriptionLanguage, string> = {
 const MODIFIER_ALIAS_TO_CANONICAL: Record<string, string> = {
   cmd: 'Cmd',
   command: 'Cmd',
+  commandorcontrol: PLATFORM_IS_MAC ? 'Cmd' : 'Ctrl',
+  commandorctrl: PLATFORM_IS_MAC ? 'Cmd' : 'Ctrl',
   control: 'Ctrl',
   ctrl: 'Ctrl',
+  cmdorctrl: PLATFORM_IS_MAC ? 'Cmd' : 'Ctrl',
+  cmdorcontrol: PLATFORM_IS_MAC ? 'Cmd' : 'Ctrl',
   option: 'Alt',
   opt: 'Alt',
   alt: 'Alt',
   shift: 'Shift',
-  super: 'Super',
+  super: PLATFORM_IS_MAC ? 'Cmd' : 'Super',
   win: 'Super',
   windows: 'Super',
-  meta: 'Meta',
-  fn: 'Fn',
-  function: 'Fn'
+  meta: PLATFORM_IS_MAC ? 'Cmd' : 'Super'
 };
 
 const NON_MODIFIER_ALIAS_TO_CANONICAL: Record<string, string> = {
+  backquote: '`',
+  backslash: '\\',
+  bracketleft: '[',
+  bracketright: ']',
+  comma: ',',
+  del: 'Delete',
+  delete: 'Delete',
+  down: 'Down',
+  end: 'End',
+  enter: 'Enter',
+  equal: '=',
+  escape: 'Escape',
+  home: 'Home',
+  insert: 'Insert',
+  left: 'Left',
+  minus: '-',
+  pagedown: 'PageDown',
+  pageup: 'PageUp',
+  period: '.',
+  quote: "'",
+  right: 'Right',
+  semicolon: ';',
+  slash: '/',
+  space: 'Space',
   spacebar: 'Space',
   esc: 'Escape',
-  return: 'Enter'
+  return: 'Enter',
+  tab: 'Tab',
+  up: 'Up'
 };
 
-const KNOWN_MODIFIERS = new Set(Object.values(MODIFIER_ALIAS_TO_CANONICAL));
-
-type HotkeyConflictInfo = {
-  reason: string;
-  fallback: string;
+const KNOWN_MODIFIERS = new Set(['Cmd', 'Ctrl', 'Alt', 'Shift', 'Super']);
+const MODIFIER_EVENT_KEYS = new Set(['Meta', 'Control', 'Alt', 'Shift', 'AltGraph']);
+const HOME_RECENT_LIMIT = 8;
+const ESTIMATED_TYPING_WPM = 40;
+const ESTIMATED_DICTATION_WPM = 130;
+const NUMBER_FORMATTER = new Intl.NumberFormat();
+type WordSegment = { isWordLike?: boolean };
+type WordSegmenterLike = { segment(input: string): Iterable<WordSegment> };
+const IntlWithSegmenter = Intl as typeof Intl & {
+  Segmenter?: new (
+    locales?: string | string[],
+    options?: { granularity: 'word' }
+  ) => WordSegmenterLike;
 };
-
-const DEFAULT_HOTKEY_CONFLICTS: Record<string, HotkeyConflictInfo> = {
-  'Cmd+Space': {
-    reason: 'Commonly reserved by macOS Spotlight.',
-    fallback: 'Cmd+Shift+Space'
-  },
-  'Cmd+Tab': {
-    reason: 'Commonly reserved by macOS App Switcher.',
-    fallback: 'Cmd+Shift+Space'
-  },
-  'Cmd+Q': {
-    reason: 'Commonly reserved by apps for Quit.',
-    fallback: 'Cmd+Shift+Space'
-  },
-  'Cmd+W': {
-    reason: 'Commonly reserved by apps for Close Window.',
-    fallback: 'Cmd+Shift+Space'
-  },
-  'Cmd+H': {
-    reason: 'Commonly reserved by apps for Hide.',
-    fallback: 'Cmd+Shift+Space'
-  },
-  'Cmd+M': {
-    reason: 'Commonly reserved by apps for Minimize.',
-    fallback: 'Cmd+Option+Space'
-  },
-  'Cmd+Option+Escape': {
-    reason: 'Reserved by macOS Force Quit dialog.',
-    fallback: 'Cmd+Shift+Space'
-  }
-};
+const WORD_SEGMENTER: WordSegmenterLike | null = IntlWithSegmenter.Segmenter
+  ? new IntlWithSegmenter.Segmenter(undefined, { granularity: 'word' })
+  : null;
 
 const appShellEl = document.querySelector<HTMLElement>('#app-shell')!;
 const sidebarToggleBtn = document.querySelector<HTMLButtonElement>('#sidebar-toggle-btn')!;
-const sidebarToggleCopyEl = document.querySelector<HTMLSpanElement>('#sidebar-toggle-copy')!;
 const statusEl = document.querySelector<HTMLParagraphElement>('#status')!;
 const modeStatusTextEl = document.querySelector<HTMLParagraphElement>('#mode-status-text')!;
 const micLevelValueEl = document.querySelector<HTMLSpanElement>('#mic-level-value')!;
@@ -167,7 +194,8 @@ const accessibilityModalOpenSettingsBtn = document.querySelector<HTMLButtonEleme
 const accessibilityModalLaterBtn = document.querySelector<HTMLButtonElement>('#accessibility-modal-later-btn')!;
 const apiKeyInput = document.querySelector<HTMLInputElement>('#apiKey')!;
 const promptTemplateInput = document.querySelector<HTMLTextAreaElement>('#promptTemplate')!;
-const hotkeyInput = document.querySelector<HTMLInputElement>('#hotkey')!;
+const holdHotkeyInput = document.querySelector<HTMLInputElement>('#holdHotkey')!;
+const toggleHotkeyInput = document.querySelector<HTMLInputElement>('#toggleHotkey')!;
 const whisperModelInput = document.querySelector<HTMLInputElement>('#whisperModel')!;
 const customVocabularyInput = document.querySelector<HTMLTextAreaElement>('#customVocabulary')!;
 const formatModelInput = document.querySelector<HTMLInputElement>('#formatModel')!;
@@ -178,52 +206,34 @@ const playSoundCuesInput = document.querySelector<HTMLInputElement>('#playSoundC
 const apiBaseUrlInput = document.querySelector<HTMLInputElement>('#apiBaseUrl')!;
 const recordingModeInput = document.querySelector<HTMLSelectElement>('#recordingMode')!;
 const languageInput = document.querySelector<HTMLSelectElement>('#language')!;
-const hotkeyValidationEl = document.querySelector<HTMLParagraphElement>('#hotkey-validation')!;
-const hotkeySuggestionBtn = document.querySelector<HTMLButtonElement>('#hotkey-suggestion-btn')!;
-const hotkeyCaptureBtn = document.querySelector<HTMLButtonElement>('#hotkey-capture-btn')!;
-const hotkeyCancelBtn = document.querySelector<HTMLButtonElement>('#hotkey-cancel-btn')!;
-const hotkeyFallbackMappingsInput = document.querySelector<HTMLTextAreaElement>('#hotkey-fallback-mappings')!;
-const hotkeyFallbackMappingsSaveBtn = document.querySelector<HTMLButtonElement>('#hotkey-fallback-mappings-save-btn')!;
-const hotkeyFallbackMappingsResetBtn = document.querySelector<HTMLButtonElement>('#hotkey-fallback-mappings-reset-btn')!;
-const hotkeyFallbackMappingsStatusEl = document.querySelector<HTMLParagraphElement>('#hotkey-fallback-mappings-status')!;
-const quickPresetButtons = document.querySelectorAll<HTMLButtonElement>('[data-hotkey-preset]');
-const onboardingHotkeyPresetButtons = document.querySelectorAll<HTMLButtonElement>('[data-onboarding-hotkey-preset]');
-const activeHotkeyChipEl = document.querySelector<HTMLSpanElement>('#active-hotkey-chip')!;
-const activeModeChipEl = document.querySelector<HTMLSpanElement>('#active-mode-chip')!;
-const activeLanguageChipEl = document.querySelector<HTMLSpanElement>('#active-language-chip')!;
-const activeStateChipEl = document.querySelector<HTMLSpanElement>('#active-state-chip')!;
-const summaryHotkeyEl = document.querySelector<HTMLSpanElement>('#summary-hotkey')!;
-const summaryModeEl = document.querySelector<HTMLSpanElement>('#summary-mode')!;
-const summaryLanguageEl = document.querySelector<HTMLSpanElement>('#summary-language')!;
+const holdHotkeyValidationEl = document.querySelector<HTMLParagraphElement>('#hold-hotkey-validation')!;
+const toggleHotkeyValidationEl = document.querySelector<HTMLParagraphElement>('#toggle-hotkey-validation')!;
+const holdHotkeyTriggerBtn = document.querySelector<HTMLButtonElement>('#hold-hotkey-trigger-btn')!;
+const toggleHotkeyTriggerBtn = document.querySelector<HTMLButtonElement>('#toggle-hotkey-trigger-btn')!;
 const homeToggleBtn = document.querySelector<HTMLButtonElement>('#home-toggle-btn')!;
 const homeFastModeBtn = document.querySelector<HTMLButtonElement>('#home-fast-mode-btn')!;
 const homeFastModeStateEl = document.querySelector<HTMLSpanElement>('#home-fast-mode-state')!;
-const homeCopyLastBtn = document.querySelector<HTMLButtonElement>('#home-copy-last-btn')!;
-const homeOpenLastBtn = document.querySelector<HTMLButtonElement>('#home-open-last-btn')!;
-const shortcutPrimaryHintEl = document.querySelector<HTMLSpanElement>('#shortcut-primary-hint')!;
-const shortcutModeHintEl = document.querySelector<HTMLSpanElement>('#shortcut-mode-hint')!;
-const homeLastOutputPreviewEl = document.querySelector<HTMLPreElement>('#home-last-output-preview')!;
-const homeLastOutputMetaEl = document.querySelector<HTMLParagraphElement>('#home-last-output-meta')!;
+const homeStatDaysEl = document.querySelector<HTMLSpanElement>('#home-stat-days')!;
+const homeStatWordsEl = document.querySelector<HTMLSpanElement>('#home-stat-words')!;
+const homeStatSavedEl = document.querySelector<HTMLSpanElement>('#home-stat-saved')!;
+const homeRecentEmptyEl = document.querySelector<HTMLParagraphElement>('#home-recent-empty')!;
+const homeRecentFeedEl = document.querySelector<HTMLDivElement>('#home-recent-feed')!;
+const shortcutHoldHintEl = document.querySelector<HTMLSpanElement>('#shortcut-hold-hint')!;
+const shortcutToggleHintEl = document.querySelector<HTMLSpanElement>('#shortcut-toggle-hint')!;
+const statusBannerEl = document.querySelector<HTMLElement>('#status-banner')!;
+const statusLabelEl = document.querySelector<HTMLSpanElement>('#status-label')!;
+const sidebarBrandNameEl = document.querySelector<HTMLElement>('#sidebar-brand-name')!;
+const workspaceViewTitleEl = document.querySelector<HTMLElement>('#workspace-view-title')!;
+const appToastEl = document.querySelector<HTMLDivElement>('#app-toast')!;
+const appToastIconEl = document.querySelector<HTMLSpanElement>('#app-toast-icon')!;
+const appToastTextEl = document.querySelector<HTMLParagraphElement>('#app-toast-text')!;
 const tabButtons = document.querySelectorAll<HTMLButtonElement>('[data-tab-target]');
 const tabPanels = document.querySelectorAll<HTMLElement>('[data-tab-panel]');
 const settingsSectionButtons = document.querySelectorAll<HTMLButtonElement>('[data-settings-target]');
 const settingsSectionPanels = document.querySelectorAll<HTMLElement>('[data-settings-panel]');
-const historyListEl = document.querySelector<HTMLUListElement>('#history-list')!;
+const historyFeedEl = document.querySelector<HTMLDivElement>('#history-feed')!;
 const historyEmptyEl = document.querySelector<HTMLParagraphElement>('#history-empty')!;
 const historySearchInput = document.querySelector<HTMLInputElement>('#history-search')!;
-const historyFilterModeInput = document.querySelector<HTMLSelectElement>('#history-filter-mode')!;
-const historyFilterLanguageInput = document.querySelector<HTMLSelectElement>('#history-filter-language')!;
-const historyFilterDateInput = document.querySelector<HTMLSelectElement>('#history-filter-date')!;
-const historyExportTxtBtn = document.querySelector<HTMLButtonElement>('#history-export-txt-btn')!;
-const historyExportJsonBtn = document.querySelector<HTMLButtonElement>('#history-export-json-btn')!;
-const historyClearBtn = document.querySelector<HTMLButtonElement>('#history-clear-btn')!;
-const historySummaryCountEl = document.querySelector<HTMLElement>('#history-summary-count')!;
-const historySummaryMedianEl = document.querySelector<HTMLElement>('#history-summary-median')!;
-const historySummarySlowEl = document.querySelector<HTMLElement>('#history-summary-slow')!;
-const historyDetailMetaEl = document.querySelector<HTMLParagraphElement>('#history-detail-meta')!;
-const historyDetailTextEl = document.querySelector<HTMLPreElement>('#history-detail-text')!;
-const historyCopyBtn = document.querySelector<HTMLButtonElement>('#history-copy-btn')!;
-const historyReuseBtn = document.querySelector<HTMLButtonElement>('#history-reuse-btn')!;
 const reopenOnboardingBtn = document.querySelector<HTMLButtonElement>('#reopen-onboarding-btn')!;
 const onboardingModalEl = document.querySelector<HTMLDivElement>('#onboarding-modal')!;
 const onboardingStepIndicatorEl = document.querySelector<HTMLParagraphElement>('#onboarding-step-indicator')!;
@@ -232,6 +242,8 @@ const onboardingSkipBtn = document.querySelector<HTMLButtonElement>('#onboarding
 const onboardingBackBtn = document.querySelector<HTMLButtonElement>('#onboarding-back-btn')!;
 const onboardingNextBtn = document.querySelector<HTMLButtonElement>('#onboarding-next-btn')!;
 const onboardingFinishBtn = document.querySelector<HTMLButtonElement>('#onboarding-finish-btn')!;
+const onboardingTitleEl = document.querySelector<HTMLHeadingElement>('#onboarding-title')!;
+const onboardingPermissionsCopyEl = document.querySelector<HTMLParagraphElement>('#onboarding-permissions-copy')!;
 const onboardingApiKeyInput = document.querySelector<HTMLInputElement>('#onboarding-api-key')!;
 const onboardingApiBaseUrlInput = document.querySelector<HTMLInputElement>('#onboarding-api-base-url')!;
 const onboardingApiKeyValidationEl = document.querySelector<HTMLParagraphElement>('#onboarding-api-key-validation')!;
@@ -242,9 +254,7 @@ const onboardingApiBaseUrlFixBtn = document.querySelector<HTMLButtonElement>('#o
 const onboardingRecordingModeInput = document.querySelector<HTMLSelectElement>('#onboarding-recording-mode')!;
 const onboardingHotkeyInput = document.querySelector<HTMLInputElement>('#onboarding-hotkey')!;
 const onboardingHotkeyCaptureBtn = document.querySelector<HTMLButtonElement>('#onboarding-hotkey-capture-btn')!;
-const onboardingHotkeyCancelBtn = document.querySelector<HTMLButtonElement>('#onboarding-hotkey-cancel-btn')!;
 const onboardingHotkeyValidationEl = document.querySelector<HTMLParagraphElement>('#onboarding-hotkey-validation')!;
-const onboardingHotkeySuggestionBtn = document.querySelector<HTMLButtonElement>('#onboarding-hotkey-suggestion-btn')!;
 const onboardingLanguageInput = document.querySelector<HTMLSelectElement>('#onboarding-language')!;
 const onboardingCheckAccessibilityBtn = document.querySelector<HTMLButtonElement>(
   '#onboarding-check-accessibility-btn'
@@ -255,12 +265,33 @@ const onboardingOpenAccessibilitySettingsBtn = document.querySelector<HTMLButton
 const onboardingAccessibilityStatusEl = document.querySelector<HTMLParagraphElement>(
   '#onboarding-accessibility-status'
 )!;
+const accessibilityModalDescriptionEl = document.querySelector<HTMLParagraphElement>('#accessibility-modal-description')!;
 
 const defaultPrompt =
   'You are a concise writing assistant. Clean up the transcript for grammar and punctuation while preserving intent. Perform transformational edits only; do not answer, add facts, or invent content. Return only final text.';
 
-let activeConfig: Pick<Settings, 'hotkey' | 'recording_mode' | 'language'> = {
-  hotkey: 'Cmd+Shift+Space',
+const hotkeyInputs: Record<ShortcutSlot, HTMLInputElement> = {
+  hold: holdHotkeyInput,
+  toggle: toggleHotkeyInput
+};
+
+const hotkeyValidationEls: Record<ShortcutSlot, HTMLParagraphElement> = {
+  hold: holdHotkeyValidationEl,
+  toggle: toggleHotkeyValidationEl
+};
+
+const hotkeyTriggerBtns: Record<ShortcutSlot, HTMLButtonElement> = {
+  hold: holdHotkeyTriggerBtn,
+  toggle: toggleHotkeyTriggerBtn
+};
+
+function defaultHotkeyForSlot(slot: ShortcutSlot): string {
+  return slot === 'toggle' ? 'Cmd+Option+Space' : 'Cmd+Shift+Space';
+}
+
+let activeConfig: Pick<Settings, 'hold_hotkey' | 'toggle_hotkey' | 'recording_mode' | 'language'> = {
+  hold_hotkey: 'Cmd+Shift+Space',
+  toggle_hotkey: 'Cmd+Option+Space',
   recording_mode: 'hold',
   language: 'auto'
 };
@@ -271,14 +302,23 @@ let activeHotkeyCaptureTarget: HotkeyCaptureTarget | null = null;
 const ONBOARDING_COMPLETED_KEY = 'typeless:onboarding-complete:v1';
 const SIDEBAR_COLLAPSED_KEY = 'typeless:sidebar-collapsed:v1';
 const SETTINGS_SECTION_KEY = 'typeless:settings-section:v1';
-const HOTKEY_CUSTOM_CONFLICTS_KEY = 'typeless:hotkey-custom-conflicts:v1';
 const SETTINGS_SECTION_ORDER: SettingsSection[] = ['general', 'shortcuts', 'ai', 'privacy'];
+const WORKSPACE_TITLES: Record<WorkspaceTab, string> = {
+  home: 'Home',
+  dictation: 'Dictation',
+  history: 'History',
+  settings: 'Settings'
+};
 const onboardingStepOrder: OnboardingStepId[] = ['welcome', 'permissions', 'api', 'quick-setup', 'finish'];
 let onboardingStepIndex = 0;
 let historyEntries: TranscriptHistoryEntry[] = [];
 let historySelectedEntryId: number | null = null;
+let historyCopiedEntryId: number | null = null;
+let shouldScrollHistorySelection = false;
 let durableDraft: DurableDraft | null = null;
 const TOGGLE_PENDING_TIMEOUT_MS = 3000;
+const HISTORY_COPY_FEEDBACK_TIMEOUT_MS = 1600;
+const APP_TOAST_TIMEOUT_MS = 1600;
 let lastRuntimeStatus: RuntimeStatus | null = null;
 let lastAccessibilityStatus: AccessibilityPermissionStatus | null = null;
 let lastApiDiagnosticsStatus: ApiDiagnosticsStatus = {
@@ -288,8 +328,9 @@ let lastApiDiagnosticsStatus: ApiDiagnosticsStatus = {
 };
 let togglePendingAction: 'starting' | 'stopping' | null = null;
 let togglePendingTimeoutId: number | null = null;
-let customHotkeyConflicts: Record<string, HotkeyConflictInfo> = {};
-let effectiveHotkeyConflicts: Record<string, HotkeyConflictInfo> = { ...DEFAULT_HOTKEY_CONFLICTS };
+let historyCopyFeedbackTimeoutId: number | null = null;
+let appToastTimeoutId: number | null = null;
+let lastDebugLogLines: string[] = [];
 
 function setAccessibilityStatusSummary(message: string, clearStructured = false): void {
   accessibilityStatusEl.textContent = message;
@@ -304,6 +345,84 @@ function apiDiagnosticsSummaryLabel(state: ApiDiagnosticsStatus['state']): strin
   if (state === 'passed') return 'API ok';
   if (state === 'failed') return 'API failed';
   return '';
+}
+
+function isShortcutRelatedMessage(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return normalized.includes('shortcut') || normalized.includes('hotkey');
+}
+
+function focusShortcutSettings(): void {
+  setActiveTab('settings');
+  setActiveSettingsSection('shortcuts');
+}
+
+function setStatusBannerTone(tone: StatusBannerTone, label: string): void {
+  statusBannerEl.dataset.statusTone = tone;
+  statusLabelEl.textContent = label;
+}
+
+function applyBranding(): void {
+  document.title = APP_BRAND.displayName;
+  sidebarBrandNameEl.textContent = APP_BRAND.displayName;
+  accessibilityModalDescriptionEl.textContent = `${APP_BRAND.displayName} needs Accessibility permission to paste into the currently focused input across apps and terminals.`;
+  onboardingTitleEl.textContent = `Welcome to ${APP_BRAND.displayName}`;
+  onboardingPermissionsCopyEl.textContent = `Accessibility allows ${APP_BRAND.displayName} to insert text into the active app. Microphone permission is also required.`;
+}
+
+function renderWorkspaceHeader(tab: WorkspaceTab): void {
+  workspaceViewTitleEl.textContent = WORKSPACE_TITLES[tab];
+}
+
+function inferStatusBannerPresentation(message: string): { tone: StatusBannerTone; label: string } {
+  const normalized = message.trim().toLowerCase();
+  if (lastRuntimeStatus?.is_recording) {
+    return { tone: 'recording', label: 'Recording' };
+  }
+  if (lastRuntimeStatus?.is_processing) {
+    return { tone: 'processing', label: 'Processing' };
+  }
+  if (
+    normalized.includes('failed') ||
+    normalized.includes('error') ||
+    normalized.includes("aren't available") ||
+    normalized.includes('not available') ||
+    normalized.includes('missing') ||
+    normalized.includes('too short')
+  ) {
+    return { tone: 'issue', label: 'Issue' };
+  }
+  if (
+    normalized.includes('starting') ||
+    normalized.includes('stopping') ||
+    normalized.includes('testing') ||
+    normalized.includes('checking') ||
+    normalized.includes('loading') ||
+    normalized.includes('transcribing') ||
+    normalized.includes('formatting')
+  ) {
+    return { tone: 'processing', label: 'Working' };
+  }
+  if (normalized.includes('recording')) {
+    return { tone: 'recording', label: 'Recording' };
+  }
+  return { tone: 'ready', label: 'Ready' };
+}
+
+function syncStatusBannerFromText(): void {
+  const message = statusEl.textContent?.trim() || 'Ready.';
+  const presentation = inferStatusBannerPresentation(message);
+  setStatusBannerTone(presentation.tone, presentation.label);
+}
+
+function runtimeStatusBannerPresentation(status: RuntimeStatus): { tone: StatusBannerTone; label: string } {
+  if (status.is_recording) {
+    return { tone: 'recording', label: 'Recording' };
+  }
+  if (status.is_processing) {
+    return { tone: 'processing', label: 'Processing' };
+  }
+  return inferStatusBannerPresentation(status.last_message);
 }
 
 function setApiDiagnosticsStatus(state: ApiDiagnosticsStatus['state'], message: string): void {
@@ -334,7 +453,7 @@ function setDiagnosticsCopyStatus(
   settingsDiagnosticsCopyStatusEl.classList.toggle('status-copy-error', state === 'error');
 }
 
-function buildDiagnosticsReport(): string {
+function buildDiagnosticsReport(debugLogLines: string[]): string {
   const generatedAt = new Date().toISOString();
   const runtime = lastRuntimeStatus;
   const runtimeState = runtime ? runtimeStateLabel(runtime) : 'Unknown';
@@ -344,9 +463,10 @@ function buildDiagnosticsReport(): string {
   const accessibilitySummary = settingsAccessibilityStatusEl.textContent?.trim() || 'Unavailable';
   const apiState = lastApiDiagnosticsStatus.state.replace('_', ' ');
   const apiMessage = lastApiDiagnosticsStatus.message.trim() || 'Unavailable';
+  const config = currentSettingsConfig();
 
   return [
-    'Typeless Lite Diagnostics',
+    `${APP_BRAND.legalName} Diagnostics`,
     `generated_at: ${generatedAt}`,
     '',
     '[runtime]',
@@ -355,6 +475,12 @@ function buildDiagnosticsReport(): string {
     `is_processing: ${runtime ? String(runtime.is_processing) : 'unknown'}`,
     `mic_level_percent: ${runtimeMicLevel}`,
     `message: ${runtimeMessage}`,
+    '',
+    '[shortcuts]',
+    `hold_hotkey: ${config.hold_hotkey}`,
+    `toggle_hotkey: ${config.toggle_hotkey}`,
+    `button_mode: ${recordingModeLabel(config.recording_mode)}`,
+    `language: ${languageLabel(config.language)}`,
     '',
     '[accessibility]',
     `summary: ${accessibilitySummary}`,
@@ -367,12 +493,16 @@ function buildDiagnosticsReport(): string {
     '[api_test]',
     `state: ${apiState}`,
     `message: ${apiMessage}`,
-    `updated_at: ${formatDiagnosticsTime(lastApiDiagnosticsStatus.updated_at_ms)}`
+    `updated_at: ${formatDiagnosticsTime(lastApiDiagnosticsStatus.updated_at_ms)}`,
+    '',
+    '[debug_log]',
+    ...(debugLogLines.length > 0 ? debugLogLines : ['<empty>'])
   ].join('\n');
 }
 
 function setActiveTab(targetTab: WorkspaceTab, focusTab = false): void {
   activeTab = targetTab;
+  renderWorkspaceHeader(targetTab);
   tabButtons.forEach((button) => {
     const isActive = button.dataset.tabTarget === targetTab;
     button.classList.toggle('is-active', isActive);
@@ -484,7 +614,6 @@ function setSidebarCollapsedState(collapsed: boolean): void {
   sidebarToggleBtn.setAttribute('aria-expanded', String(!collapsed));
   sidebarToggleBtn.setAttribute('aria-label', collapsed ? 'Expand sidebar' : 'Collapse sidebar');
   sidebarToggleBtn.title = collapsed ? 'Expand sidebar' : 'Collapse sidebar';
-  sidebarToggleCopyEl.textContent = collapsed ? 'Expand sidebar' : 'Collapse sidebar';
 }
 
 function setupSidebar(): void {
@@ -509,7 +638,7 @@ function syncOnboardingInputsFromSettings(): void {
   onboardingApiKeyInput.value = apiKeyInput.value.trim();
   onboardingApiBaseUrlInput.value = apiBaseUrlInput.value.trim() || 'https://api.openai.com/v1';
   onboardingRecordingModeInput.value = normalizeMode(recordingModeInput.value);
-  onboardingHotkeyInput.value = normalizeHotkeyInput(hotkeyInput.value) || 'Cmd+Shift+Space';
+  onboardingHotkeyInput.value = normalizeHotkeyInput(holdHotkeyInput.value) || defaultHotkeyForSlot('hold');
   onboardingLanguageInput.value = normalizeLanguage(languageInput.value);
   validateOnboardingApiStep();
   validateOnboardingHotkeyInput();
@@ -560,14 +689,10 @@ function languageLabel(language: TranscriptionLanguage): string {
   return LANGUAGE_LABELS[language] || 'Auto';
 }
 
-function setHotkeyValidation(message: string, isError: boolean): void {
-  hotkeyValidationEl.textContent = message;
-  hotkeyValidationEl.classList.toggle('error', isError);
-}
-
 function setOnboardingHotkeyValidation(message: string, isError: boolean): void {
   onboardingHotkeyValidationEl.textContent = message;
   onboardingHotkeyValidationEl.classList.toggle('error', isError);
+  onboardingHotkeyValidationEl.classList.toggle('hidden', message.trim().length === 0);
 }
 
 function setOnboardingApiKeyValidation(message: string, isError: boolean): void {
@@ -700,6 +825,61 @@ function normalizeLanguage(language: string): TranscriptionLanguage {
   return 'auto';
 }
 
+function canonicalizeNonModifierToken(input: string): string | null {
+  const compactPart = input.replace(/\s+/g, '');
+  const aliasKey = compactPart.toLowerCase();
+  const normalizedAlias = NON_MODIFIER_ALIAS_TO_CANONICAL[aliasKey];
+  if (normalizedAlias) {
+    return normalizedAlias;
+  }
+  if (/^key[a-z]$/.test(aliasKey)) {
+    return aliasKey.slice(3).toUpperCase();
+  }
+  if (/^[a-z]$/.test(aliasKey)) {
+    return aliasKey.toUpperCase();
+  }
+  if (/^digit[0-9]$/.test(aliasKey)) {
+    return aliasKey.slice(5);
+  }
+  if (/^[0-9]$/.test(aliasKey)) {
+    return aliasKey;
+  }
+  if (/^f([1-9]|1[0-9]|2[0-4])$/.test(aliasKey)) {
+    return aliasKey.toUpperCase();
+  }
+  if (/^numpad[0-9]$/.test(aliasKey)) {
+    return `Num${aliasKey.slice(-1)}`;
+  }
+  if (/^num[0-9]$/.test(aliasKey)) {
+    return `Num${aliasKey.slice(-1)}`;
+  }
+  switch (aliasKey) {
+    case 'numpadadd':
+    case 'numadd':
+      return 'NumAdd';
+    case 'numpaddecimal':
+    case 'numdecimal':
+      return 'NumDecimal';
+    case 'numpaddivide':
+    case 'numdivide':
+      return 'NumDivide';
+    case 'numpadenter':
+    case 'numenter':
+      return 'NumEnter';
+    case 'numpadequal':
+    case 'numequal':
+      return 'NumEqual';
+    case 'numpadmultiply':
+    case 'nummultiply':
+      return 'NumMultiply';
+    case 'numpadsubtract':
+    case 'numsubtract':
+      return 'NumSubtract';
+    default:
+      return null;
+  }
+}
+
 function normalizeHotkeyInput(input: string): string {
   const normalizedParts = input
     .trim()
@@ -713,12 +893,9 @@ function normalizeHotkeyInput(input: string): string {
       if (normalizedModifier) {
         return normalizedModifier;
       }
-      const normalizedNonModifier = NON_MODIFIER_ALIAS_TO_CANONICAL[aliasKey];
+      const normalizedNonModifier = canonicalizeNonModifierToken(compactPart);
       if (normalizedNonModifier) {
         return normalizedNonModifier;
-      }
-      if (compactPart.length === 1) {
-        return compactPart.toUpperCase();
       }
       return compactPart;
     });
@@ -731,7 +908,7 @@ function normalizeHotkeyInput(input: string): string {
 function validateHotkey(hotkey: string): string | null {
   const trimmed = hotkey.trim();
   if (!trimmed) {
-    return 'Hotkey cannot be empty. Try Cmd+Shift+Space.';
+    return 'Choose a shortcut.';
   }
 
   const rawParts = trimmed.split('+').map((part) => part.trim());
@@ -754,220 +931,116 @@ function validateHotkey(hotkey: string): string | null {
   }
 
   if (nonModifiers.length === 0) {
-    return 'Hotkey needs one non-modifier key (for example Space).';
+    return 'Add one key besides the modifiers.';
   }
 
   if (nonModifiers.length > 1) {
     return 'Use exactly one non-modifier key.';
   }
 
+  if (!canonicalizeNonModifierToken(nonModifiers[0])) {
+    return `Unsupported key "${nonModifiers[0]}". Use a real key like A, 1, Space, or F8.`;
+  }
+
+  const primaryKey = nonModifiers[0];
+  const isFunctionKey = /^F([1-9]|1[0-9]|2[0-4])$/.test(primaryKey);
+  if (modifiers.length < 2 && !isFunctionKey) {
+    return 'Use two modifiers or an F key.';
+  }
+
   return null;
 }
 
-function normalizeConflictReason(reason: string, hotkey: string): string {
-  const trimmedReason = reason.trim();
-  if (trimmedReason) return trimmedReason;
-  return `Custom fallback mapping for ${hotkey}.`;
+function hotkeyHasNonModifier(hotkey: string): boolean {
+  return normalizeHotkeyInput(hotkey)
+    .split('+')
+    .some((part) => part && !KNOWN_MODIFIERS.has(part));
 }
 
-function sanitizeCustomHotkeyConflicts(
-  input: unknown
-): { normalized: Record<string, HotkeyConflictInfo>; removedCount: number } {
-  const normalized: Record<string, HotkeyConflictInfo> = {};
-  let removedCount = 0;
-  if (!input || typeof input !== 'object' || Array.isArray(input)) {
-    return { normalized, removedCount };
+function keyTokenFromCode(code: string): string | null {
+  if (!code) return null;
+  if (/^Key[A-Z]$/.test(code)) {
+    return code.slice(3);
   }
-
-  for (const [requestedRaw, entry] of Object.entries(input as Record<string, unknown>)) {
-    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
-      removedCount += 1;
-      continue;
-    }
-
-    const fallbackRaw = (entry as { fallback?: unknown }).fallback;
-    if (typeof fallbackRaw !== 'string') {
-      removedCount += 1;
-      continue;
-    }
-
-    const requested = normalizeHotkeyInput(requestedRaw);
-    const fallback = normalizeHotkeyInput(fallbackRaw);
-    if (!requested || !fallback || validateHotkey(requested) || validateHotkey(fallback)) {
-      removedCount += 1;
-      continue;
-    }
-
-    const reasonRaw = (entry as { reason?: unknown }).reason;
-    const reason = typeof reasonRaw === 'string' ? normalizeConflictReason(reasonRaw, requested) : normalizeConflictReason('', requested);
-    normalized[requested] = {
-      reason,
-      fallback
-    };
+  if (/^Digit[0-9]$/.test(code)) {
+    return code.slice(5);
   }
-
-  return { normalized, removedCount };
-}
-
-function refreshEffectiveHotkeyConflicts(): void {
-  effectiveHotkeyConflicts = {
-    ...DEFAULT_HOTKEY_CONFLICTS,
-    ...customHotkeyConflicts
-  };
-}
-
-function loadCustomHotkeyConflicts(): void {
-  const persisted = localStorage.getItem(HOTKEY_CUSTOM_CONFLICTS_KEY);
-  if (!persisted) {
-    customHotkeyConflicts = {};
-    refreshEffectiveHotkeyConflicts();
-    return;
+  if (/^F([1-9]|1[0-9]|2[0-4])$/.test(code)) {
+    return code;
   }
-
-  try {
-    const parsed = JSON.parse(persisted) as unknown;
-    const { normalized, removedCount } = sanitizeCustomHotkeyConflicts(parsed);
-    customHotkeyConflicts = normalized;
-    refreshEffectiveHotkeyConflicts();
-    if (removedCount > 0) {
-      localStorage.setItem(HOTKEY_CUSTOM_CONFLICTS_KEY, JSON.stringify(customHotkeyConflicts));
-    }
-  } catch {
-    customHotkeyConflicts = {};
-    refreshEffectiveHotkeyConflicts();
-    localStorage.removeItem(HOTKEY_CUSTOM_CONFLICTS_KEY);
+  if (/^Numpad[0-9]$/.test(code)) {
+    return `Num${code.slice(-1)}`;
   }
-}
-
-function persistCustomHotkeyConflicts(): void {
-  if (Object.keys(customHotkeyConflicts).length === 0) {
-    localStorage.removeItem(HOTKEY_CUSTOM_CONFLICTS_KEY);
-    return;
+  switch (code) {
+    case 'ArrowDown':
+      return 'Down';
+    case 'ArrowLeft':
+      return 'Left';
+    case 'ArrowRight':
+      return 'Right';
+    case 'ArrowUp':
+      return 'Up';
+    case 'Backquote':
+      return '`';
+    case 'Backslash':
+      return '\\';
+    case 'Backspace':
+      return 'Backspace';
+    case 'BracketLeft':
+      return '[';
+    case 'BracketRight':
+      return ']';
+    case 'Comma':
+      return ',';
+    case 'Delete':
+      return 'Delete';
+    case 'End':
+      return 'End';
+    case 'Enter':
+      return 'Enter';
+    case 'Equal':
+      return '=';
+    case 'Escape':
+      return 'Escape';
+    case 'Home':
+      return 'Home';
+    case 'Insert':
+      return 'Insert';
+    case 'Minus':
+      return '-';
+    case 'NumpadAdd':
+      return 'NumAdd';
+    case 'NumpadDecimal':
+      return 'NumDecimal';
+    case 'NumpadDivide':
+      return 'NumDivide';
+    case 'NumpadEnter':
+      return 'NumEnter';
+    case 'NumpadEqual':
+      return 'NumEqual';
+    case 'NumpadMultiply':
+      return 'NumMultiply';
+    case 'NumpadSubtract':
+      return 'NumSubtract';
+    case 'PageDown':
+      return 'PageDown';
+    case 'PageUp':
+      return 'PageUp';
+    case 'Period':
+      return '.';
+    case 'Quote':
+      return "'";
+    case 'Semicolon':
+      return ';';
+    case 'Slash':
+      return '/';
+    case 'Space':
+      return 'Space';
+    case 'Tab':
+      return 'Tab';
+    default:
+      return null;
   }
-  localStorage.setItem(HOTKEY_CUSTOM_CONFLICTS_KEY, JSON.stringify(customHotkeyConflicts));
-}
-
-function formatCustomHotkeyConflictsForEditor(map: Record<string, HotkeyConflictInfo>): string {
-  const lines = Object.entries(map)
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([requested, info]) => {
-      const defaultReason = normalizeConflictReason('', requested);
-      const reasonPart = info.reason.trim() === defaultReason ? '' : ` | ${info.reason.trim()}`;
-      return `${requested} => ${info.fallback}${reasonPart}`;
-    });
-  return lines.join('\n');
-}
-
-function parseCustomHotkeyConflictsEditorValue(
-  value: string
-): { conflicts: Record<string, HotkeyConflictInfo>; error: string | null } {
-  const conflicts: Record<string, HotkeyConflictInfo> = {};
-  const lines = value.split('\n');
-
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index].trim();
-    if (!line || line.startsWith('#')) continue;
-
-    const separatorIndex = line.indexOf('=>');
-    if (separatorIndex <= 0) {
-      return {
-        conflicts: {},
-        error: `Line ${index + 1} is invalid. Use "RequestedHotkey => FallbackHotkey | Optional reason".`
-      };
-    }
-
-    const requestedRaw = line.slice(0, separatorIndex).trim();
-    const rightSide = line.slice(separatorIndex + 2).trim();
-    if (!requestedRaw || !rightSide) {
-      return {
-        conflicts: {},
-        error: `Line ${index + 1} is missing a requested or fallback hotkey.`
-      };
-    }
-
-    const reasonSeparatorIndex = rightSide.indexOf('|');
-    const fallbackRaw = reasonSeparatorIndex >= 0 ? rightSide.slice(0, reasonSeparatorIndex).trim() : rightSide;
-    const reasonRaw = reasonSeparatorIndex >= 0 ? rightSide.slice(reasonSeparatorIndex + 1).trim() : '';
-    const requested = normalizeHotkeyInput(requestedRaw);
-    const fallback = normalizeHotkeyInput(fallbackRaw);
-    const requestedError = validateHotkey(requested);
-    const fallbackError = validateHotkey(fallback);
-    if (requestedError) {
-      return {
-        conflicts: {},
-        error: `Line ${index + 1} requested hotkey is invalid: ${requestedError}`
-      };
-    }
-    if (fallbackError) {
-      return {
-        conflicts: {},
-        error: `Line ${index + 1} fallback hotkey is invalid: ${fallbackError}`
-      };
-    }
-
-    conflicts[requested] = {
-      fallback,
-      reason: normalizeConflictReason(reasonRaw, requested)
-    };
-  }
-
-  return { conflicts, error: null };
-}
-
-function setHotkeyFallbackMappingsStatus(message: string, isError = false): void {
-  hotkeyFallbackMappingsStatusEl.textContent = message;
-  hotkeyFallbackMappingsStatusEl.classList.toggle('error', isError);
-}
-
-function applyHotkeyConflictMappings(conflicts: Record<string, HotkeyConflictInfo>): void {
-  customHotkeyConflicts = conflicts;
-  refreshEffectiveHotkeyConflicts();
-  hotkeyFallbackMappingsInput.value = formatCustomHotkeyConflictsForEditor(customHotkeyConflicts);
-  validateHotkeyInput();
-  validateOnboardingHotkeyInput();
-}
-
-function setupHotkeyFallbackMappingsEditor(): void {
-  loadCustomHotkeyConflicts();
-  hotkeyFallbackMappingsInput.value = formatCustomHotkeyConflictsForEditor(customHotkeyConflicts);
-  setHotkeyFallbackMappingsStatus('No custom fallback mappings saved yet.', false);
-
-  hotkeyFallbackMappingsSaveBtn.addEventListener('click', () => {
-    const parsed = parseCustomHotkeyConflictsEditorValue(hotkeyFallbackMappingsInput.value);
-    if (parsed.error) {
-      setHotkeyFallbackMappingsStatus(parsed.error, true);
-      return;
-    }
-    applyHotkeyConflictMappings(parsed.conflicts);
-    persistCustomHotkeyConflicts();
-    const count = Object.keys(parsed.conflicts).length;
-    setHotkeyFallbackMappingsStatus(
-      count > 0 ? `Saved ${count} custom fallback mapping${count === 1 ? '' : 's'}.` : 'Custom fallback mappings cleared.',
-      false
-    );
-  });
-
-  hotkeyFallbackMappingsResetBtn.addEventListener('click', () => {
-    applyHotkeyConflictMappings({});
-    persistCustomHotkeyConflicts();
-    setHotkeyFallbackMappingsStatus('Reset custom mappings. Default fallback mappings are active.', false);
-  });
-}
-
-function getHotkeyConflictInfo(hotkey: string): HotkeyConflictInfo | null {
-  const normalized = normalizeHotkeyInput(hotkey);
-  return effectiveHotkeyConflicts[normalized] ?? null;
-}
-
-function setHotkeySuggestion(button: HTMLButtonElement, conflictInfo: HotkeyConflictInfo | null): void {
-  if (!conflictInfo) {
-    button.classList.add('hidden');
-    button.dataset.fallbackHotkey = '';
-    return;
-  }
-  button.textContent = `Use suggested fallback: ${conflictInfo.fallback}`;
-  button.dataset.fallbackHotkey = conflictInfo.fallback;
-  button.classList.remove('hidden');
 }
 
 function hotkeyFromKeyboardEvent(event: KeyboardEvent): string {
@@ -977,25 +1050,91 @@ function hotkeyFromKeyboardEvent(event: KeyboardEvent): string {
   if (event.altKey) parts.push('Alt');
   if (event.shiftKey) parts.push('Shift');
 
-  const key = event.key;
-  if (key && !['Meta', 'Control', 'Alt', 'Shift', 'AltGraph'].includes(key)) {
-    let normalizedKey = key;
-    if (key === ' ') normalizedKey = 'Space';
-    if (key.length === 1) normalizedKey = key.toUpperCase();
-    if (key === 'Escape') normalizedKey = 'Escape';
-    if (key === 'ArrowUp') normalizedKey = 'Up';
-    if (key === 'ArrowDown') normalizedKey = 'Down';
-    if (key === 'ArrowLeft') normalizedKey = 'Left';
-    if (key === 'ArrowRight') normalizedKey = 'Right';
+  const normalizedKey =
+    keyTokenFromCode(event.code) ||
+    (event.key && !MODIFIER_EVENT_KEYS.has(event.key) ? canonicalizeNonModifierToken(event.key) : null);
+  if (normalizedKey) {
     parts.push(normalizedKey);
   }
 
   return normalizeHotkeyInput(parts.join('+'));
 }
 
-function applyConfigUi(config: Pick<Settings, 'hotkey' | 'recording_mode' | 'language'>): void {
+function createHotkeyToken(label: string): HTMLSpanElement {
+  const token = document.createElement('span');
+  token.className = 'hotkey-token';
+  token.textContent = label;
+  return token;
+}
+
+function hotkeyTokenDisplayLabel(token: string): string {
+  switch (token) {
+    case 'Alt':
+      return PLATFORM_IS_MAC ? 'Option' : 'Alt';
+    case 'Escape':
+      return 'Esc';
+    case 'PageDown':
+      return 'PgDn';
+    case 'PageUp':
+      return 'PgUp';
+    case 'NumAdd':
+      return 'Num +';
+    case 'NumDecimal':
+      return 'Num .';
+    case 'NumDivide':
+      return 'Num /';
+    case 'NumEnter':
+      return 'Num Enter';
+    case 'NumEqual':
+      return 'Num =';
+    case 'NumMultiply':
+      return 'Num *';
+    case 'NumSubtract':
+      return 'Num -';
+    default:
+      return token;
+  }
+}
+
+function renderHotkeyValue(target: HTMLElement, hotkey: string, emptyLabel = 'Not set'): void {
+  const normalized = normalizeHotkeyInput(hotkey);
+  const parts = normalized.split('+').filter(Boolean);
+  target.replaceChildren();
+
+  const wrapper = document.createElement('span');
+  wrapper.className = 'hotkey-value';
+  if (parts.length === 0) {
+    wrapper.append(createHotkeyToken(emptyLabel));
+  } else {
+    parts.forEach((part) => {
+      wrapper.append(createHotkeyToken(hotkeyTokenDisplayLabel(part)));
+    });
+  }
+  target.append(wrapper);
+}
+
+function renderHotkeyTrigger(button: HTMLButtonElement, hotkey: string, isCapturing = false): void {
+  button.classList.toggle('is-capturing', isCapturing);
+  button.setAttribute('aria-pressed', String(isCapturing));
+  if (isCapturing) {
+    button.textContent = 'Press keys';
+    return;
+  }
+  renderHotkeyValue(button, hotkey);
+}
+
+function renderShortcutTrigger(slot: ShortcutSlot, hotkey: string, isCapturing = false): void {
+  renderHotkeyTrigger(hotkeyTriggerBtns[slot], hotkey, isCapturing);
+}
+
+function renderOnboardingHotkeyTrigger(hotkey: string, isCapturing = false): void {
+  renderHotkeyTrigger(onboardingHotkeyCaptureBtn, hotkey, isCapturing);
+}
+
+function applyConfigUi(config: Pick<Settings, 'hold_hotkey' | 'toggle_hotkey' | 'recording_mode' | 'language'>): void {
   activeConfig = {
-    hotkey: normalizeHotkeyInput(config.hotkey) || 'Cmd+Shift+Space',
+    hold_hotkey: normalizeHotkeyInput(config.hold_hotkey) || defaultHotkeyForSlot('hold'),
+    toggle_hotkey: normalizeHotkeyInput(config.toggle_hotkey) || defaultHotkeyForSlot('toggle'),
     recording_mode: normalizeMode(config.recording_mode),
     language: normalizeLanguage(config.language)
   };
@@ -1003,19 +1142,15 @@ function applyConfigUi(config: Pick<Settings, 'hotkey' | 'recording_mode' | 'lan
   const modeLabel = recordingModeLabel(activeConfig.recording_mode);
   const languageText = languageLabel(activeConfig.language);
 
-  activeHotkeyChipEl.textContent = activeConfig.hotkey;
-  activeModeChipEl.textContent = modeLabel;
-  activeLanguageChipEl.textContent = languageText;
-  summaryHotkeyEl.textContent = activeConfig.hotkey;
-  summaryModeEl.textContent = modeLabel;
-  summaryLanguageEl.textContent = languageText;
-  shortcutPrimaryHintEl.textContent = activeConfig.hotkey;
-  shortcutModeHintEl.textContent = modeLabel;
-
-  modeStatusTextEl.textContent =
-    activeConfig.recording_mode === 'toggle'
-      ? 'Toggle mode active: press the hotkey once to start and press again to stop.'
-      : 'Hold-to-record mode active: hold the hotkey to record and release to stop.';
+  renderHotkeyValue(shortcutHoldHintEl, activeConfig.hold_hotkey);
+  renderHotkeyValue(shortcutToggleHintEl, activeConfig.toggle_hotkey);
+  renderShortcutTrigger('hold', activeConfig.hold_hotkey, activeHotkeyCaptureTarget === 'settings-hold');
+  renderShortcutTrigger('toggle', activeConfig.toggle_hotkey, activeHotkeyCaptureTarget === 'settings-toggle');
+  renderOnboardingHotkeyTrigger(
+    onboardingHotkeyInput.value || activeConfig.hold_hotkey,
+    activeHotkeyCaptureTarget === 'onboarding'
+  );
+  modeStatusTextEl.textContent = `${modeLabel}. ${languageText}.`;
 }
 
 function setRecordingActionLabels(
@@ -1043,8 +1178,9 @@ function renderStatus(status: RuntimeStatus): void {
   lastRuntimeStatus = status;
   clearTogglePendingState(status.is_recording);
   const state = runtimeStateLabel(status);
-  statusEl.textContent = `${state}: ${status.last_message}`;
-  activeStateChipEl.textContent = state;
+  const bannerPresentation = runtimeStatusBannerPresentation(status);
+  statusEl.textContent = status.last_message;
+  setStatusBannerTone(bannerPresentation.tone, bannerPresentation.label);
   setRecordingActionLabels(status.is_recording);
 
   const level = Math.max(0, Math.min(100, Math.round(status.mic_level || 0)));
@@ -1074,8 +1210,8 @@ function beginOptimisticToggleState(): boolean {
   togglePendingAction = nextAction;
   setToggleButtonsDisabled(true);
   setRecordingActionLabels(nextAction === 'starting', nextAction);
+  setStatusBannerTone('processing', nextAction === 'starting' ? 'Starting' : 'Stopping');
   statusEl.textContent = nextAction === 'starting' ? 'Starting recording...' : 'Stopping recording...';
-  activeStateChipEl.textContent = nextAction === 'starting' ? 'Starting...' : 'Stopping...';
   togglePendingTimeoutId = window.setTimeout(() => {
     clearTogglePendingState();
   }, TOGGLE_PENDING_TIMEOUT_MS);
@@ -1148,7 +1284,8 @@ function readSettingsFromForm(): Settings {
   return {
     api_key: apiKeyInput.value.trim(),
     prompt_template: promptTemplateInput.value.trim() || defaultPrompt,
-    hotkey: normalizeHotkeyInput(hotkeyInput.value),
+    hold_hotkey: normalizeHotkeyInput(holdHotkeyInput.value),
+    toggle_hotkey: normalizeHotkeyInput(toggleHotkeyInput.value),
     whisper_model: whisperModelInput.value.trim() || 'whisper-1',
     custom_vocabulary: customVocabularyInput.value.trim(),
     format_model: formatModelInput.value.trim() || 'gpt-4o-mini',
@@ -1162,62 +1299,87 @@ function readSettingsFromForm(): Settings {
   };
 }
 
-function validateHotkeyInput(): string | null {
-  const validationMessage = validateHotkey(hotkeyInput.value);
+function currentSettingsConfig(): Pick<Settings, 'hold_hotkey' | 'toggle_hotkey' | 'recording_mode' | 'language'> {
+  return {
+    hold_hotkey: normalizeHotkeyInput(holdHotkeyInput.value) || defaultHotkeyForSlot('hold'),
+    toggle_hotkey: normalizeHotkeyInput(toggleHotkeyInput.value) || defaultHotkeyForSlot('toggle'),
+    recording_mode: normalizeMode(recordingModeInput.value),
+    language: normalizeLanguage(languageInput.value)
+  };
+}
+
+function setSettingsHotkeyValidation(slot: ShortcutSlot, message: string, isError = false): void {
+  const el = hotkeyValidationEls[slot];
+  el.textContent = message;
+  el.classList.toggle('error', isError);
+  el.classList.toggle('hidden', message.trim().length === 0);
+}
+
+function validateDistinctHotkeys(): string | null {
+  const holdValue = normalizeHotkeyInput(holdHotkeyInput.value);
+  const toggleValue = normalizeHotkeyInput(toggleHotkeyInput.value);
+  if (!holdValue || !toggleValue) return null;
+  if (holdValue === toggleValue) {
+    return 'Hold to speak and hands-free shortcuts must be different.';
+  }
+  return null;
+}
+
+function validateSettingsHotkeyInput(slot: ShortcutSlot): string | null {
+  const input = hotkeyInputs[slot];
+  const validationMessage = validateHotkey(input.value);
   if (validationMessage) {
-    setHotkeySuggestion(hotkeySuggestionBtn, null);
-    setHotkeyValidation(validationMessage, true);
+    setSettingsHotkeyValidation(slot, validationMessage, true);
     return validationMessage;
   }
 
-  hotkeyInput.value = normalizeHotkeyInput(hotkeyInput.value);
-  const conflictInfo = getHotkeyConflictInfo(hotkeyInput.value);
-  setHotkeySuggestion(hotkeySuggestionBtn, conflictInfo);
-  if (conflictInfo) {
-    const conflictMessage = `Hotkey conflict preflight: ${conflictInfo.reason}`;
-    setHotkeyValidation(conflictMessage, true);
-    return conflictMessage;
+  input.value = normalizeHotkeyInput(input.value);
+
+  const distinctError = validateDistinctHotkeys();
+  if (distinctError) {
+    setSettingsHotkeyValidation('hold', distinctError, true);
+    setSettingsHotkeyValidation('toggle', distinctError, true);
+    return distinctError;
   }
 
-  setHotkeyValidation('Hotkey looks good.', false);
+  setSettingsHotkeyValidation('hold', '', false);
+  setSettingsHotkeyValidation('toggle', '', false);
   return null;
 }
 
 function validateOnboardingHotkeyInput(): string | null {
   const validationMessage = validateHotkey(onboardingHotkeyInput.value);
   if (validationMessage) {
-    setHotkeySuggestion(onboardingHotkeySuggestionBtn, null);
     setOnboardingHotkeyValidation(validationMessage, true);
     return validationMessage;
   }
 
   onboardingHotkeyInput.value = normalizeHotkeyInput(onboardingHotkeyInput.value);
-  const conflictInfo = getHotkeyConflictInfo(onboardingHotkeyInput.value);
-  setHotkeySuggestion(onboardingHotkeySuggestionBtn, conflictInfo);
-  if (conflictInfo) {
-    const conflictMessage = `Hotkey conflict preflight: ${conflictInfo.reason}`;
-    setOnboardingHotkeyValidation(conflictMessage, true);
-    return conflictMessage;
-  }
+  renderOnboardingHotkeyTrigger(onboardingHotkeyInput.value, activeHotkeyCaptureTarget === 'onboarding');
+  setOnboardingHotkeyValidation('', false);
+  return null;
+}
 
-  setOnboardingHotkeyValidation('Hotkey looks good.', false);
+function settingsHotkeyCaptureSlot(target: HotkeyCaptureTarget): ShortcutSlot | null {
+  if (target === 'settings-hold') return 'hold';
+  if (target === 'settings-toggle') return 'toggle';
   return null;
 }
 
 function stopHotkeyCapture(message?: string, isError = false): void {
   if (!activeHotkeyCaptureTarget) return;
-  if (activeHotkeyCaptureTarget === 'settings') {
-    hotkeyCaptureBtn.textContent = 'Edit hotkey';
-    hotkeyCaptureBtn.disabled = false;
-    hotkeyCancelBtn.classList.add('hidden');
-    if (message) setHotkeyValidation(message, isError);
+  const slot = settingsHotkeyCaptureSlot(activeHotkeyCaptureTarget);
+  if (slot) {
+    hotkeyTriggerBtns[slot].disabled = false;
+    setSettingsHotkeyValidation(slot, isError ? message || '' : '', isError);
   } else {
-    onboardingHotkeyCaptureBtn.textContent = 'Edit hotkey';
     onboardingHotkeyCaptureBtn.disabled = false;
-    onboardingHotkeyCancelBtn.classList.add('hidden');
-    if (message) setOnboardingHotkeyValidation(message, isError);
+    setOnboardingHotkeyValidation(isError ? message || '' : '', isError);
   }
   activeHotkeyCaptureTarget = null;
+  applyConfigUi({
+    ...currentSettingsConfig()
+  });
 }
 
 function startHotkeyCapture(target: HotkeyCaptureTarget): void {
@@ -1225,32 +1387,28 @@ function startHotkeyCapture(target: HotkeyCaptureTarget): void {
     stopHotkeyCapture();
   }
   activeHotkeyCaptureTarget = target;
-  if (target === 'settings') {
-    hotkeyCaptureBtn.textContent = 'Press shortcut...';
-    hotkeyCaptureBtn.disabled = true;
-    hotkeyCancelBtn.classList.remove('hidden');
-    setHotkeyValidation('Listening for a shortcut. Press Esc to cancel.', false);
+  const slot = settingsHotkeyCaptureSlot(target);
+  if (slot) {
+    hotkeyTriggerBtns[slot].disabled = false;
+    setSettingsHotkeyValidation(slot, '', false);
   } else {
-    onboardingHotkeyCaptureBtn.textContent = 'Press shortcut...';
-    onboardingHotkeyCaptureBtn.disabled = true;
-    onboardingHotkeyCancelBtn.classList.remove('hidden');
-    setOnboardingHotkeyValidation('Listening for a shortcut. Press Esc to cancel.', false);
+    onboardingHotkeyCaptureBtn.disabled = false;
+    setOnboardingHotkeyValidation('', false);
   }
+  applyConfigUi({
+    ...currentSettingsConfig()
+  });
 }
 
 function setupHotkeyCapture(): void {
-  hotkeyCaptureBtn.addEventListener('click', () => {
-    startHotkeyCapture('settings');
+  holdHotkeyTriggerBtn.addEventListener('click', () => {
+    startHotkeyCapture('settings-hold');
+  });
+  toggleHotkeyTriggerBtn.addEventListener('click', () => {
+    startHotkeyCapture('settings-toggle');
   });
   onboardingHotkeyCaptureBtn.addEventListener('click', () => {
     startHotkeyCapture('onboarding');
-  });
-
-  hotkeyCancelBtn.addEventListener('click', () => {
-    stopHotkeyCapture('Hotkey capture canceled.', false);
-  });
-  onboardingHotkeyCancelBtn.addEventListener('click', () => {
-    stopHotkeyCapture('Hotkey capture canceled.', false);
   });
 
   window.addEventListener(
@@ -1266,23 +1424,27 @@ function setupHotkeyCapture(): void {
       }
 
       const candidate = hotkeyFromKeyboardEvent(event);
+      if (!hotkeyHasNonModifier(candidate)) {
+        return;
+      }
       const validationMessage = validateHotkey(candidate);
       if (validationMessage) {
-        if (activeHotkeyCaptureTarget === 'settings') {
-          setHotkeyValidation(validationMessage, true);
+        const slot = settingsHotkeyCaptureSlot(activeHotkeyCaptureTarget);
+        if (slot) {
+          setSettingsHotkeyValidation(slot, validationMessage, true);
         } else {
           setOnboardingHotkeyValidation(validationMessage, true);
         }
         return;
       }
 
-      if (activeHotkeyCaptureTarget === 'settings') {
-        hotkeyInput.value = candidate;
-        validateHotkeyInput();
+      const slot = settingsHotkeyCaptureSlot(activeHotkeyCaptureTarget);
+      if (slot) {
+        hotkeyInputs[slot].value = candidate;
+        validateSettingsHotkeyInput('hold');
+        validateSettingsHotkeyInput('toggle');
         applyConfigUi({
-          hotkey: candidate,
-          recording_mode: normalizeMode(recordingModeInput.value),
-          language: normalizeLanguage(languageInput.value)
+          ...currentSettingsConfig()
         });
       } else {
         onboardingHotkeyInput.value = candidate;
@@ -1302,11 +1464,13 @@ async function saveSettingsPayload(payload: Settings, successMessage = 'Saved se
       invoke<RuntimeStatus>('get_runtime_status')
     ]);
     applyConfigUi({
-      hotkey: savedSettings.hotkey,
+      hold_hotkey: savedSettings.hold_hotkey,
+      toggle_hotkey: savedSettings.toggle_hotkey,
       recording_mode: savedSettings.recording_mode,
       language: savedSettings.language
     });
-    hotkeyInput.value = normalizeHotkeyInput(savedSettings.hotkey) || hotkeyInput.value;
+    holdHotkeyInput.value = normalizeHotkeyInput(savedSettings.hold_hotkey) || holdHotkeyInput.value;
+    toggleHotkeyInput.value = normalizeHotkeyInput(savedSettings.toggle_hotkey) || toggleHotkeyInput.value;
     formatEnabledInput.checked = savedSettings.format_enabled;
     renderFastModeState(savedSettings.format_enabled);
     renderStatus(runtimeStatus);
@@ -1316,10 +1480,21 @@ async function saveSettingsPayload(payload: Settings, successMessage = 'Saved se
     return true;
   } catch (error) {
     const errorText = String(error);
-    if (errorText.toLowerCase().includes('hotkey')) {
-      setActiveTab('settings');
-      setActiveSettingsSection('shortcuts');
-      setHotkeyValidation('Hotkey is invalid for this system. Try one of the preset combos.', true);
+    const normalizedError = errorText.toLowerCase();
+    if (isShortcutRelatedMessage(errorText)) {
+      focusShortcutSettings();
+      if (normalizedError.includes('hold')) {
+        setSettingsHotkeyValidation('hold', errorText, true);
+        setSettingsHotkeyValidation('toggle', '', false);
+      } else if (normalizedError.includes('toggle') || normalizedError.includes('hands-free')) {
+        setSettingsHotkeyValidation('toggle', errorText, true);
+        setSettingsHotkeyValidation('hold', '', false);
+      } else {
+        setSettingsHotkeyValidation('hold', errorText, true);
+        setSettingsHotkeyValidation('toggle', errorText, true);
+      }
+      statusEl.textContent = errorText;
+      return false;
     }
     statusEl.textContent = `Failed to save settings: ${errorText}`;
     return false;
@@ -1350,14 +1525,13 @@ function applyOnboardingSelectionsToSettingsForm(): string | null {
 
   apiKeyInput.value = onboardingApiKeyInput.value.trim();
   apiBaseUrlInput.value = normalizeBaseUrlForSettingsInput(onboardingApiBaseUrlInput.value);
-  hotkeyInput.value = onboardingHotkey;
+  holdHotkeyInput.value = onboardingHotkey;
   recordingModeInput.value = normalizeMode(onboardingRecordingModeInput.value);
   languageInput.value = normalizeLanguage(onboardingLanguageInput.value);
-  validateHotkeyInput();
+  validateSettingsHotkeyInput('hold');
+  validateSettingsHotkeyInput('toggle');
   applyConfigUi({
-    hotkey: hotkeyInput.value,
-    recording_mode: normalizeMode(recordingModeInput.value),
-    language: normalizeLanguage(languageInput.value)
+    ...currentSettingsConfig()
   });
   return null;
 }
@@ -1366,45 +1540,230 @@ function formatHistoryTimestamp(timestampMs: number): string {
   return new Date(timestampMs).toLocaleString();
 }
 
-function formatLatency(latencyMs?: number | null): string {
-  if (latencyMs == null || latencyMs < 0) return 'n/a';
-  return `${Math.round(latencyMs)}ms`;
+function countTranscriptWords(text: string): number {
+  const trimmed = text.trim();
+  if (!trimmed) return 0;
+  if (WORD_SEGMENTER) {
+    let count = 0;
+    for (const segment of WORD_SEGMENTER.segment(trimmed)) {
+      if (segment.isWordLike) {
+        count += 1;
+      }
+    }
+    return count;
+  }
+  return trimmed.split(/\s+/).filter(Boolean).length;
 }
 
-function formatPercentage(value: number): string {
-  return `${Math.round(value)}%`;
+function formatSavedTime(minutes: number): string {
+  const roundedMinutes = Math.max(0, Math.round(minutes));
+  if (roundedMinutes < 60) return `${roundedMinutes}m`;
+  const hours = Math.floor(roundedMinutes / 60);
+  const remainingMinutes = roundedMinutes % 60;
+  return remainingMinutes === 0 ? `${hours}h` : `${hours}h ${remainingMinutes}m`;
 }
 
-function computeMedian(values: number[]): number | null {
-  if (values.length === 0) return null;
-  const sorted = [...values].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  if (sorted.length % 2 === 1) return sorted[mid];
-  return (sorted[mid - 1] + sorted[mid]) / 2;
+function computeHistoryStats(entries: TranscriptHistoryEntry[]): {
+  activeDays: number;
+  totalWords: number;
+  estimatedMinutesSaved: number;
+} {
+  const activeDays = new Set(entries.map((entry) => historyDayKey(entry.created_at_ms))).size;
+  const totalWords = entries.reduce((sum, entry) => sum + countTranscriptWords(entry.final_output), 0);
+  const typingMinutes = totalWords / ESTIMATED_TYPING_WPM;
+  const dictationMinutes = totalWords / ESTIMATED_DICTATION_WPM;
+  return {
+    activeDays,
+    totalWords,
+    estimatedMinutesSaved: Math.max(0, typingMinutes - dictationMinutes)
+  };
 }
 
-function getLatestHistoryEntry(): TranscriptHistoryEntry | null {
-  if (historyEntries.length === 0) return null;
-  return [...historyEntries].sort((a, b) => b.created_at_ms - a.created_at_ms)[0];
+async function copyTextWithStatus(text: string, successMessage: string): Promise<void> {
+  await invoke('copy_text_to_clipboard', { text });
+  statusEl.textContent = successMessage;
 }
 
-function refreshHomeLastOutputPreview(): void {
-  const latestEntry = getLatestHistoryEntry();
-  const hasEntry = Boolean(latestEntry);
-  homeCopyLastBtn.disabled = !hasEntry;
-  homeOpenLastBtn.disabled = !hasEntry;
-  if (!latestEntry) {
-    homeLastOutputPreviewEl.textContent = 'No recent transcript yet.';
-    homeLastOutputMetaEl.textContent = 'No history metadata yet.';
+function appToastIconSvg(tone: AppToastTone): string {
+  if (tone === 'error') {
+    return `
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M6.5 6.5 17.5 17.5"></path>
+        <path d="M17.5 6.5 6.5 17.5"></path>
+      </svg>
+    `;
+  }
+  return `
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M5 12.5 9.5 17 19 7.5"></path>
+    </svg>
+  `;
+}
+
+function showAppToast(message: string, tone: AppToastTone = 'success'): void {
+  if (appToastTimeoutId !== null) {
+    window.clearTimeout(appToastTimeoutId);
+    appToastTimeoutId = null;
+  }
+  appToastEl.dataset.tone = tone;
+  appToastIconEl.innerHTML = appToastIconSvg(tone);
+  appToastTextEl.textContent = message;
+  appToastEl.classList.add('is-visible');
+  appToastEl.setAttribute('aria-hidden', 'false');
+  appToastTimeoutId = window.setTimeout(() => {
+    appToastEl.classList.remove('is-visible');
+    appToastEl.setAttribute('aria-hidden', 'true');
+    appToastTimeoutId = null;
+  }, APP_TOAST_TIMEOUT_MS);
+}
+
+function markHistoryEntryCopied(entryId: number): void {
+  historyCopiedEntryId = entryId;
+  if (historyCopyFeedbackTimeoutId !== null) {
+    window.clearTimeout(historyCopyFeedbackTimeoutId);
+    historyCopyFeedbackTimeoutId = null;
+  }
+  historyCopyFeedbackTimeoutId = window.setTimeout(() => {
+    historyCopiedEntryId = null;
+    historyCopyFeedbackTimeoutId = null;
+    renderHistory(historyEntries);
+  }, HISTORY_COPY_FEEDBACK_TIMEOUT_MS);
+}
+
+async function handleHistoryEntryCopy(entry: TranscriptHistoryEntry): Promise<void> {
+  historySelectedEntryId = entry.id;
+  renderHistory(historyEntries);
+  try {
+    await invoke('copy_text_to_clipboard', { text: entry.final_output });
+    markHistoryEntryCopied(entry.id);
+    showAppToast('Copied');
+  } catch (error) {
+    showAppToast('Copy failed', 'error');
+    statusEl.textContent = `Copy failed: ${String(error)}`;
+  } finally {
+    renderHistory(historyEntries);
+  }
+}
+
+function createTranscriptRow(
+  entry: TranscriptHistoryEntry,
+  options: {
+    active?: boolean;
+    staticMain?: boolean;
+    onMainClick?: (() => void) | null;
+    actionMode?: TranscriptRowActionMode;
+    isCopied?: boolean;
+  } = {}
+): HTMLDivElement {
+  const rowEl = document.createElement('div');
+  rowEl.className = 'history-row';
+  if (options.active) {
+    rowEl.classList.add('is-active');
+  }
+
+  const onMainClick = options.onMainClick ?? null;
+  const mainEl = onMainClick ? document.createElement('button') : document.createElement('div');
+  if (mainEl instanceof HTMLButtonElement && onMainClick) {
+    mainEl.type = 'button';
+    mainEl.addEventListener('click', onMainClick);
+    mainEl.setAttribute(
+      'aria-label',
+      `Transcript from ${formatHistoryDayLabel(entry.created_at_ms)} at ${formatHistoryTime(entry.created_at_ms)}`
+    );
+  }
+  mainEl.className = 'history-row-main';
+  if (options.staticMain || !options.onMainClick) {
+    mainEl.classList.add('is-static');
+  }
+
+  const timeEl = document.createElement('span');
+  timeEl.className = 'history-row-time';
+  timeEl.textContent = formatHistoryTime(entry.created_at_ms);
+
+  const bodyEl = document.createElement('div');
+  bodyEl.className = 'history-row-body';
+
+  const textEl = document.createElement('p');
+  textEl.className = 'history-row-text';
+  textEl.textContent = entry.final_output.trim() || 'Empty transcript';
+
+  bodyEl.append(textEl);
+  mainEl.append(timeEl, bodyEl);
+
+  const actionsEl = document.createElement('div');
+  actionsEl.className = 'history-row-actions';
+  const actionMode = options.actionMode ?? 'button';
+
+  if (actionMode === 'indicator') {
+    const indicatorEl = document.createElement('span');
+    indicatorEl.className = 'history-row-indicator';
+
+    const iconEl = document.createElement('span');
+    iconEl.className = 'history-row-indicator-icon';
+    iconEl.setAttribute('aria-hidden', 'true');
+    iconEl.innerHTML = options.isCopied
+      ? `
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M5 12.5 9.5 17 19 7.5"></path>
+          </svg>
+        `
+      : `
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="9" y="9" width="10" height="10" rx="2"></rect>
+            <path d="M15 9V7a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2"></path>
+          </svg>
+        `;
+
+    const labelEl = document.createElement('span');
+    labelEl.className = 'history-row-indicator-label';
+    labelEl.textContent = options.isCopied ? 'Copied' : '';
+
+    indicatorEl.classList.add(options.isCopied ? 'is-copied' : 'is-idle');
+    indicatorEl.append(iconEl, labelEl);
+    actionsEl.append(indicatorEl);
+  } else {
+    const copyBtn = document.createElement('button');
+    copyBtn.type = 'button';
+    copyBtn.className = 'history-copy-btn';
+    copyBtn.textContent = 'Copy';
+    copyBtn.setAttribute(
+      'aria-label',
+      `Copy transcript from ${formatHistoryDayLabel(entry.created_at_ms)} at ${formatHistoryTime(entry.created_at_ms)}`
+    );
+    copyBtn.addEventListener('click', async (event) => {
+      event.stopPropagation();
+      copyBtn.disabled = true;
+      try {
+        await copyTextWithStatus(entry.final_output, 'Transcript copied to clipboard.');
+      } catch (error) {
+        statusEl.textContent = `Copy failed: ${String(error)}`;
+      } finally {
+        copyBtn.disabled = false;
+      }
+    });
+    actionsEl.append(copyBtn);
+  }
+
+  rowEl.append(mainEl, actionsEl);
+  return rowEl;
+}
+
+function renderHomeOverview(): void {
+  const stats = computeHistoryStats(historyEntries);
+  homeStatDaysEl.textContent = NUMBER_FORMATTER.format(stats.activeDays);
+  homeStatWordsEl.textContent = NUMBER_FORMATTER.format(stats.totalWords);
+  homeStatSavedEl.textContent = formatSavedTime(stats.estimatedMinutesSaved);
+
+  const recentEntries = historyEntries.slice(0, HOME_RECENT_LIMIT);
+  homeRecentFeedEl.replaceChildren();
+  homeRecentEmptyEl.hidden = recentEntries.length > 0;
+  if (recentEntries.length === 0) {
     return;
   }
 
-  const preview = latestEntry.final_output.trim();
-  homeLastOutputPreviewEl.textContent =
-    preview.length > 280 ? `${preview.slice(0, 280).trimEnd()}...` : preview;
-  homeLastOutputMetaEl.textContent = `${formatHistoryTimestamp(latestEntry.created_at_ms)} | ${
-    latestEntry.source_app || 'Unknown app'
-  } | ${formatLatency(latestEntry.processing_latency_ms)}`;
+  for (const entry of recentEntries) {
+    homeRecentFeedEl.append(createTranscriptRow(entry, { staticMain: true }));
+  }
 }
 
 function renderDurableDraft(draft: DurableDraft | null): void {
@@ -1424,165 +1783,123 @@ function renderDurableDraft(draft: DurableDraft | null): void {
   )} | ${recordingModeLabel(draft.recording_mode)} | ${languageLabel(draft.language)} | ${sourceApp}\n${previewText}`;
 }
 
-function historyDateFilterMatch(entry: TranscriptHistoryEntry, filter: string): boolean {
-  if (filter === 'all') return true;
-  const now = Date.now();
-  const ageMs = now - entry.created_at_ms;
-  if (filter === 'today') {
-    const today = new Date();
-    const entryDate = new Date(entry.created_at_ms);
-    return (
-      today.getFullYear() === entryDate.getFullYear() &&
-      today.getMonth() === entryDate.getMonth() &&
-      today.getDate() === entryDate.getDate()
-    );
-  }
-  if (filter === '7d') return ageMs <= 7 * 24 * 60 * 60 * 1000;
-  if (filter === '30d') return ageMs <= 30 * 24 * 60 * 60 * 1000;
-  return true;
+function isSameCalendarDay(left: Date, right: Date): boolean {
+  return (
+    left.getFullYear() === right.getFullYear() &&
+    left.getMonth() === right.getMonth() &&
+    left.getDate() === right.getDate()
+  );
 }
 
-function getFilteredHistoryEntries(): TranscriptHistoryEntry[] {
-  const search = historySearchInput.value.trim().toLowerCase();
-  const modeFilter = historyFilterModeInput.value;
-  const languageFilter = historyFilterLanguageInput.value;
-  const dateFilter = historyFilterDateInput.value;
-
-  return historyEntries.filter((entry) => {
-    const matchesMode = modeFilter === 'all' || entry.recording_mode === modeFilter;
-    const matchesLanguage = languageFilter === 'all' || entry.language === languageFilter;
-    const matchesDate = historyDateFilterMatch(entry, dateFilter);
-    if (!matchesMode || !matchesLanguage || !matchesDate) return false;
-    if (!search) return true;
-
-    const searchable = `${entry.final_output} ${entry.language} ${entry.recording_mode} ${
-      entry.source_app || ''
-    } ${entry.source}`.toLowerCase();
-    return searchable.includes(search);
+function formatHistoryTime(timestampMs: number): string {
+  return new Date(timestampMs).toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit'
   });
 }
 
-function buildHistoryExportFilename(extension: 'txt' | 'json', count: number): string {
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  return `typeless-history-${timestamp}-${count}-entries.${extension}`;
+function historyDayKey(timestampMs: number): string {
+  const date = new Date(timestampMs);
+  return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
 }
 
-function downloadTextFile(filename: string, content: string): void {
-  const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
+function formatHistoryDayLabel(timestampMs: number): string {
+  const entryDate = new Date(timestampMs);
+  const today = new Date();
+  const yesterday = new Date();
+  yesterday.setDate(today.getDate() - 1);
+  if (isSameCalendarDay(entryDate, today)) return 'Today';
+  if (isSameCalendarDay(entryDate, yesterday)) return 'Yesterday';
+  return entryDate.toLocaleDateString([], {
+    month: 'long',
+    day: 'numeric',
+    year: entryDate.getFullYear() === today.getFullYear() ? undefined : 'numeric'
+  });
 }
 
-function historyEntryExportHeader(entry: TranscriptHistoryEntry): string {
-  const sourceApp = entry.source_app?.trim() || 'Unknown app';
-  return `${formatHistoryTimestamp(entry.created_at_ms)} | ${recordingModeLabel(entry.recording_mode)} | ${languageLabel(
-    entry.language
-  )} | ${sourceApp} | ${formatLatency(entry.processing_latency_ms)}`;
-}
-
-function buildHistoryTxtExport(entries: TranscriptHistoryEntry[]): string {
-  return entries
-    .map(
-      (entry, index) =>
-        `${index + 1}. ${historyEntryExportHeader(entry)}\n${entry.final_output.trim()}\n`
-    )
-    .join('\n');
-}
-
-function renderHistoryDetail(entry: TranscriptHistoryEntry | null): void {
-  const hasEntry = Boolean(entry);
-  historyCopyBtn.disabled = !hasEntry;
-  historyReuseBtn.disabled = !hasEntry;
-
-  if (!entry) {
-    historyDetailMetaEl.textContent = 'Select an entry from the list.';
-    historyDetailTextEl.textContent = 'No transcript selected.';
-    return;
+function groupHistoryEntries(entries: TranscriptHistoryEntry[]): HistoryDayGroup[] {
+  const groups: HistoryDayGroup[] = [];
+  for (const entry of entries) {
+    const key = historyDayKey(entry.created_at_ms);
+    const lastGroup = groups[groups.length - 1];
+    if (!lastGroup || lastGroup.key !== key) {
+      groups.push({
+        key,
+        label: formatHistoryDayLabel(entry.created_at_ms),
+        entries: [entry]
+      });
+      continue;
+    }
+    lastGroup.entries.push(entry);
   }
-
-  const sourceApp = entry.source_app?.trim() ? entry.source_app : 'Unknown app';
-  historyDetailMetaEl.textContent = `${formatHistoryTimestamp(entry.created_at_ms)} | ${recordingModeLabel(
-    entry.recording_mode
-  )} | ${languageLabel(entry.language)} | ${sourceApp} | ${formatLatency(entry.processing_latency_ms)}`;
-  historyDetailTextEl.textContent = entry.final_output;
+  return groups;
 }
 
-function renderHistoryPerformanceSummary(entries: TranscriptHistoryEntry[]): void {
-  historySummaryCountEl.textContent = String(entries.length);
-
-  const latencies = entries
-    .map((entry) => entry.processing_latency_ms)
-    .filter((latencyMs): latencyMs is number => latencyMs != null && latencyMs >= 0);
-  const medianLatency = computeMedian(latencies);
-  historySummaryMedianEl.textContent = formatLatency(medianLatency);
-
-  const slowRuns = entries.filter((entry) => (entry.processing_latency_ms ?? -1) >= 4000).length;
-  const slowPercentage = entries.length === 0 ? 0 : (slowRuns / entries.length) * 100;
-  historySummarySlowEl.textContent = formatPercentage(slowPercentage);
+function getVisibleHistoryEntries(): TranscriptHistoryEntry[] {
+  const query = historySearchInput.value.trim().toLowerCase();
+  if (!query) return historyEntries;
+  return historyEntries.filter((entry) => {
+    const haystack = `${entry.final_output} ${entry.source_app || ''}`.toLowerCase();
+    return haystack.includes(query);
+  });
 }
 
 function renderHistory(entries: TranscriptHistoryEntry[]): void {
   historyEntries = [...entries].sort((a, b) => b.created_at_ms - a.created_at_ms);
-  const filteredEntries = getFilteredHistoryEntries();
-  renderHistoryPerformanceSummary(filteredEntries);
-
-  if (historySelectedEntryId && !filteredEntries.some((entry) => entry.id === historySelectedEntryId)) {
+  renderHomeOverview();
+  const visibleEntries = getVisibleHistoryEntries();
+  if (historySelectedEntryId && !visibleEntries.some((entry) => entry.id === historySelectedEntryId)) {
     historySelectedEntryId = null;
   }
 
-  historyListEl.innerHTML = '';
-  historyEmptyEl.hidden = filteredEntries.length > 0;
+  historyFeedEl.innerHTML = '';
+  historyEmptyEl.hidden = visibleEntries.length > 0;
+  if (visibleEntries.length === 0) {
+    historyEmptyEl.textContent = historyEntries.length === 0 ? 'No transcript history yet.' : 'No matching transcripts.';
+    return;
+  }
+  historyEmptyEl.textContent = 'No transcript history yet.';
 
-  for (const entry of filteredEntries) {
-    const li = document.createElement('li');
-    li.className = 'history-item';
-    li.tabIndex = 0;
-    li.setAttribute('role', 'button');
-    li.setAttribute('aria-label', `History entry from ${formatHistoryTimestamp(entry.created_at_ms)}`);
-    if (entry.id === historySelectedEntryId) {
-      li.classList.add('is-active');
+  const groupedEntries = groupHistoryEntries(visibleEntries);
+  let selectedRow: HTMLDivElement | null = null;
+
+  for (const group of groupedEntries) {
+    const groupEl = document.createElement('section');
+    groupEl.className = 'history-day-group';
+
+    const dayLabelEl = document.createElement('p');
+    dayLabelEl.className = 'history-day-label';
+    dayLabelEl.textContent = group.label;
+
+    const dayCardEl = document.createElement('div');
+    dayCardEl.className = 'history-day-card';
+
+    for (const entry of group.entries) {
+      const rowEl = createTranscriptRow(entry, {
+        active: entry.id === historySelectedEntryId,
+        actionMode: 'indicator',
+        isCopied: entry.id === historyCopiedEntryId,
+        onMainClick: () => {
+          void handleHistoryEntryCopy(entry);
+        }
+      });
+      if (entry.id === historySelectedEntryId) {
+        historySelectedEntryId = entry.id;
+        selectedRow = rowEl;
+      }
+      dayCardEl.append(rowEl);
     }
 
-    const meta = document.createElement('div');
-    meta.className = 'history-item-meta';
-
-    const time = document.createElement('span');
-    time.textContent = formatHistoryTimestamp(entry.created_at_ms);
-    meta.appendChild(time);
-
-    const info = document.createElement('span');
-    info.textContent = `${recordingModeLabel(entry.recording_mode)} | ${languageLabel(entry.language)} | ${
-      entry.source_app || 'Unknown app'
-    } | ${formatLatency(entry.processing_latency_ms)}`;
-    meta.appendChild(info);
-
-    const text = document.createElement('p');
-    text.className = 'history-item-text';
-    text.textContent = entry.final_output;
-
-    li.append(meta, text);
-    li.addEventListener('click', () => {
-      historySelectedEntryId = entry.id;
-      renderHistory(historyEntries);
-    });
-    li.addEventListener('keydown', (event) => {
-      if (event.key !== 'Enter' && event.key !== ' ') return;
-      event.preventDefault();
-      historySelectedEntryId = entry.id;
-      renderHistory(historyEntries);
-    });
-    historyListEl.appendChild(li);
+    groupEl.append(dayLabelEl, dayCardEl);
+    historyFeedEl.append(groupEl);
   }
 
-  const selectedEntry = filteredEntries.find((entry) => entry.id === historySelectedEntryId) || null;
-  renderHistoryDetail(selectedEntry);
-  refreshHomeLastOutputPreview();
+  if (selectedRow && shouldScrollHistorySelection) {
+    requestAnimationFrame(() => {
+      selectedRow?.scrollIntoView({ block: 'center' });
+    });
+  }
+  shouldScrollHistorySelection = false;
 }
 
 async function loadHistory(): Promise<void> {
@@ -1594,7 +1911,8 @@ async function loadInitial(): Promise<void> {
   const settings = await invoke<Settings>('get_settings');
   apiKeyInput.value = settings.api_key;
   promptTemplateInput.value = settings.prompt_template || defaultPrompt;
-  hotkeyInput.value = normalizeHotkeyInput(settings.hotkey) || 'Cmd+Shift+Space';
+  holdHotkeyInput.value = normalizeHotkeyInput(settings.hold_hotkey) || defaultHotkeyForSlot('hold');
+  toggleHotkeyInput.value = normalizeHotkeyInput(settings.toggle_hotkey) || defaultHotkeyForSlot('toggle');
   whisperModelInput.value = settings.whisper_model;
   customVocabularyInput.value = settings.custom_vocabulary || '';
   formatModelInput.value = settings.format_model;
@@ -1607,18 +1925,24 @@ async function loadInitial(): Promise<void> {
   languageInput.value = normalizeLanguage(settings.language);
   syncOnboardingInputsFromSettings();
   applyConfigUi({
-    hotkey: hotkeyInput.value,
+    hold_hotkey: holdHotkeyInput.value,
+    toggle_hotkey: toggleHotkeyInput.value,
     recording_mode: normalizeMode(settings.recording_mode),
     language: normalizeLanguage(settings.language)
   });
   renderFastModeState(settings.format_enabled);
-  validateHotkeyInput();
+  validateSettingsHotkeyInput('hold');
+  validateSettingsHotkeyInput('toggle');
 
   const status = await invoke<RuntimeStatus>('get_runtime_status');
   renderStatus(status);
+  if (isShortcutRelatedMessage(status.last_message)) {
+    focusShortcutSettings();
+  }
   await loadHistory();
   const draft = await invoke<DurableDraft | null>('get_durable_draft');
   renderDurableDraft(draft);
+  lastDebugLogLines = await invoke<string[]>('get_debug_log');
 
   setAccessibilityStatusSummary('Checking...', true);
   try {
@@ -1635,54 +1959,6 @@ async function loadInitial(): Promise<void> {
     showOnboarding();
   }
 }
-
-hotkeyInput.addEventListener('click', () => {
-  startHotkeyCapture('settings');
-});
-
-onboardingHotkeyInput.addEventListener('click', () => {
-  startHotkeyCapture('onboarding');
-});
-
-quickPresetButtons.forEach((button) => {
-  button.addEventListener('click', () => {
-    const preset = normalizeHotkeyInput(button.dataset.hotkeyPreset || '');
-    hotkeyInput.value = preset;
-    validateHotkeyInput();
-    applyConfigUi({
-      hotkey: preset,
-      recording_mode: normalizeMode(recordingModeInput.value),
-      language: normalizeLanguage(languageInput.value)
-    });
-    stopHotkeyCapture();
-  });
-});
-
-onboardingHotkeyPresetButtons.forEach((button) => {
-  button.addEventListener('click', () => {
-    const preset = normalizeHotkeyInput(button.dataset.onboardingHotkeyPreset || '');
-    onboardingHotkeyInput.value = preset;
-    validateOnboardingHotkeyInput();
-    stopHotkeyCapture();
-  });
-});
-
-hotkeySuggestionBtn.addEventListener('click', () => {
-  const fallback = normalizeHotkeyInput(hotkeySuggestionBtn.dataset.fallbackHotkey || 'Cmd+Shift+Space');
-  hotkeyInput.value = fallback;
-  validateHotkeyInput();
-  applyConfigUi({
-    hotkey: fallback,
-    recording_mode: normalizeMode(recordingModeInput.value),
-    language: normalizeLanguage(languageInput.value)
-  });
-});
-
-onboardingHotkeySuggestionBtn.addEventListener('click', () => {
-  const fallback = normalizeHotkeyInput(onboardingHotkeySuggestionBtn.dataset.fallbackHotkey || 'Cmd+Shift+Space');
-  onboardingHotkeyInput.value = fallback;
-  validateOnboardingHotkeyInput();
-});
 
 onboardingApiKeyInput.addEventListener('input', () => {
   validateOnboardingApiStep();
@@ -1701,26 +1977,23 @@ onboardingApiBaseUrlFixBtn.addEventListener('click', () => {
 
 recordingModeInput.addEventListener('change', () => {
   applyConfigUi({
-    hotkey: hotkeyInput.value,
-    recording_mode: normalizeMode(recordingModeInput.value),
-    language: normalizeLanguage(languageInput.value)
+    ...currentSettingsConfig()
   });
 });
 
 languageInput.addEventListener('change', () => {
   applyConfigUi({
-    hotkey: hotkeyInput.value,
-    recording_mode: normalizeMode(recordingModeInput.value),
-    language: normalizeLanguage(languageInput.value)
+    ...currentSettingsConfig()
   });
 });
 
 form.addEventListener('submit', async (event) => {
   event.preventDefault();
-  const hotkeyError = validateHotkeyInput();
+  const holdHotkeyError = validateSettingsHotkeyInput('hold');
+  const toggleHotkeyError = validateSettingsHotkeyInput('toggle');
+  const hotkeyError = holdHotkeyError || toggleHotkeyError || validateDistinctHotkeys();
   if (hotkeyError) {
-    setActiveTab('settings');
-    setActiveSettingsSection('shortcuts');
+    focusShortcutSettings();
     statusEl.textContent = hotkeyError;
     return;
   }
@@ -1755,34 +2028,11 @@ homeFastModeBtn.addEventListener('click', async () => {
   homeFastModeBtn.disabled = false;
 });
 
-homeCopyLastBtn.addEventListener('click', async () => {
-  const latestEntry = getLatestHistoryEntry();
-  if (!latestEntry) return;
-  homeCopyLastBtn.disabled = true;
-  try {
-    await invoke('copy_text_to_clipboard', { text: latestEntry.final_output });
-    statusEl.textContent = 'Copied last transcript to clipboard.';
-  } catch (error) {
-    statusEl.textContent = `Copy failed: ${String(error)}`;
-  } finally {
-    homeCopyLastBtn.disabled = false;
-  }
-});
-
-homeOpenLastBtn.addEventListener('click', () => {
-  const latestEntry = getLatestHistoryEntry();
-  if (!latestEntry) return;
-  historySelectedEntryId = latestEntry.id;
-  renderHistory(historyEntries);
-  setActiveTab('history');
-});
-
 draftRestoreCopyBtn.addEventListener('click', async () => {
   if (!durableDraft?.text?.trim()) return;
   draftRestoreCopyBtn.disabled = true;
   try {
-    await invoke('copy_text_to_clipboard', { text: durableDraft.text });
-    statusEl.textContent = 'Recovered draft copied to clipboard.';
+    await copyTextWithStatus(durableDraft.text, 'Recovered draft copied to clipboard.');
   } catch (error) {
     statusEl.textContent = `Copy failed: ${String(error)}`;
   } finally {
@@ -1928,7 +2178,8 @@ copyDiagnosticsBtn.addEventListener('click', async () => {
   copyDiagnosticsBtn.disabled = true;
   setDiagnosticsCopyStatus('Copying diagnostics...');
   try {
-    await invoke('copy_text_to_clipboard', { text: buildDiagnosticsReport() });
+    lastDebugLogLines = await invoke<string[]>('get_debug_log');
+    await invoke('copy_text_to_clipboard', { text: buildDiagnosticsReport(lastDebugLogLines) });
     const copiedAt = new Date().toLocaleTimeString();
     setDiagnosticsCopyStatus(`Copied at ${copiedAt}.`, 'success');
     statusEl.textContent = 'Diagnostics copied to clipboard.';
@@ -1940,79 +2191,14 @@ copyDiagnosticsBtn.addEventListener('click', async () => {
   }
 });
 
-historyCopyBtn.addEventListener('click', async () => {
-  const entry = historyEntries.find((item) => item.id === historySelectedEntryId);
-  if (!entry) return;
-  historyCopyBtn.disabled = true;
-  try {
-    await invoke('copy_text_to_clipboard', { text: entry.final_output });
-    statusEl.textContent = 'Copied transcript to clipboard.';
-  } catch (error) {
-    statusEl.textContent = `Copy failed: ${String(error)}`;
-  } finally {
-    historyCopyBtn.disabled = false;
-  }
-});
-
-historyReuseBtn.addEventListener('click', () => {
-  const entry = historyEntries.find((item) => item.id === historySelectedEntryId);
-  if (!entry) return;
-  statusEl.textContent = entry.final_output;
-  setActiveTab('home');
-});
-
-const rerenderHistory = () => renderHistory(historyEntries);
-historySearchInput.addEventListener('input', rerenderHistory);
-historyFilterModeInput.addEventListener('change', rerenderHistory);
-historyFilterLanguageInput.addEventListener('change', rerenderHistory);
-historyFilterDateInput.addEventListener('change', rerenderHistory);
-
-historyExportTxtBtn.addEventListener('click', () => {
-  const filteredEntries = getFilteredHistoryEntries();
-  if (filteredEntries.length === 0) {
-    statusEl.textContent = 'No filtered transcript history to export.';
-    return;
-  }
-
-  const filename = buildHistoryExportFilename('txt', filteredEntries.length);
-  const content = buildHistoryTxtExport(filteredEntries);
-  downloadTextFile(filename, content);
-  statusEl.textContent = `Exported ${filteredEntries.length} history entries to ${filename}.`;
-});
-
-historyExportJsonBtn.addEventListener('click', () => {
-  const filteredEntries = getFilteredHistoryEntries();
-  if (filteredEntries.length === 0) {
-    statusEl.textContent = 'No filtered transcript history to export.';
-    return;
-  }
-
-  const filename = buildHistoryExportFilename('json', filteredEntries.length);
-  const content = `${JSON.stringify(filteredEntries, null, 2)}\n`;
-  downloadTextFile(filename, content);
-  statusEl.textContent = `Exported ${filteredEntries.length} history entries to ${filename}.`;
-});
-
-historyClearBtn.addEventListener('click', async () => {
-  const shouldClear = window.confirm('Clear all transcript history? This cannot be undone.');
-  if (!shouldClear) return;
-  historyClearBtn.disabled = true;
-  try {
-    await invoke('clear_transcript_history');
-    historySelectedEntryId = null;
-    renderHistory([]);
-    statusEl.textContent = 'Transcript history cleared.';
-  } catch (error) {
-    statusEl.textContent = `Failed to clear history: ${String(error)}`;
-  } finally {
-    historyClearBtn.disabled = false;
-  }
-});
-
 listen<TranscriptHistoryEntry[]>('transcript-history-updated', (event) => {
   renderHistory(event.payload);
 }).catch((error) => {
   statusEl.textContent = `History listener failed: ${String(error)}`;
+});
+
+historySearchInput.addEventListener('input', () => {
+  renderHistory(historyEntries);
 });
 
 listen<DurableDraft | null>('durable-draft-updated', (event) => {
@@ -2031,7 +2217,11 @@ setupTabs();
 setupSettingsSections();
 setupSidebar();
 setupHotkeyCapture();
-setupHotkeyFallbackMappingsEditor();
+applyBranding();
+new MutationObserver(() => {
+  syncStatusBannerFromText();
+}).observe(statusEl, { childList: true, characterData: true, subtree: true });
+syncStatusBannerFromText();
 
 loadInitial().catch((error) => {
   statusEl.textContent = `Initialization failed: ${String(error)}`;

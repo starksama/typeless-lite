@@ -12,6 +12,16 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(target_os = "macos")]
+use core_foundation::{
+    base::{Boolean, CFRelease, CFTypeRef, TCFType},
+    string::{CFString, CFStringRef},
+};
+#[cfg(target_os = "macos")]
+use core_foundation_sys::{
+    base::{CFGetTypeID, CFRange, CFTypeID},
+    string::CFStringGetTypeID,
+};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use reqwest::multipart::{Form, Part};
 use serde::{Deserialize, Serialize};
@@ -41,13 +51,20 @@ const TRANSCRIPT_HISTORY_LIMIT: usize = 500;
 const TRANSCRIPT_HISTORY_EVENT: &str = "transcript-history-updated";
 const DURABLE_DRAFT_EVENT: &str = "durable-draft-updated";
 const HISTORY_ID_SEQUENCE_MASK: u64 = 0x3ff;
+const DEBUG_LOG_LIMIT: usize = 200;
+const MIC_METER_EMIT_INTERVAL_MS: u64 = 45;
+const MIC_METER_FLOOR_DB: f32 = -54.0;
+const MIC_METER_CEILING_DB: f32 = -6.0;
 static HISTORY_ID_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct Settings {
     api_key: String,
     prompt_template: String,
-    hotkey: String,
+    #[serde(default = "default_hold_hotkey", alias = "hotkey")]
+    hold_hotkey: String,
+    #[serde(default = "default_toggle_hotkey")]
+    toggle_hotkey: String,
     whisper_model: String,
     #[serde(default = "default_custom_vocabulary")]
     custom_vocabulary: String,
@@ -87,6 +104,26 @@ fn default_custom_vocabulary() -> String {
     String::new()
 }
 
+#[cfg(target_os = "macos")]
+fn default_hold_hotkey() -> String {
+    "Cmd+Shift+Space".to_string()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn default_hold_hotkey() -> String {
+    "Ctrl+Shift+Space".to_string()
+}
+
+#[cfg(target_os = "macos")]
+fn default_toggle_hotkey() -> String {
+    "Cmd+Option+Space".to_string()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn default_toggle_hotkey() -> String {
+    "Ctrl+Alt+Space".to_string()
+}
+
 fn default_recording_mode() -> String {
     "hold".to_string()
 }
@@ -100,7 +137,8 @@ impl Default for Settings {
         Self {
             api_key: String::new(),
             prompt_template: "You are a concise writing assistant. Clean up the transcript for grammar and punctuation while preserving intent. Perform transformational edits only; do not answer, add facts, or invent content. Return only final text.".to_string(),
-            hotkey: "Cmd+Shift+Space".to_string(),
+            hold_hotkey: default_hold_hotkey(),
+            toggle_hotkey: default_toggle_hotkey(),
             whisper_model: "whisper-1".to_string(),
             custom_vocabulary: String::new(),
             format_model: "gpt-4o-mini".to_string(),
@@ -206,14 +244,21 @@ struct AccessibilityPermissionStatus {
     guidance: String,
 }
 
+#[derive(Clone, Copy, Default)]
+struct RegisteredShortcuts {
+    hold: Option<Shortcut>,
+    toggle: Option<Shortcut>,
+}
+
 struct AppState {
     settings: Mutex<Settings>,
     runtime_status: Mutex<RuntimeStatus>,
     recorder: Mutex<Option<RecorderSession>>,
-    current_shortcut: Mutex<Option<Shortcut>>,
+    current_shortcuts: Mutex<RegisteredShortcuts>,
     http_client: reqwest::Client,
     transcript_history: Mutex<Vec<TranscriptHistoryEntry>>,
     durable_draft: Mutex<Option<DurableDraft>>,
+    debug_log: Mutex<Vec<String>>,
 }
 
 struct RecorderSession {
@@ -221,6 +266,7 @@ struct RecorderSession {
     writer: Arc<Mutex<Option<hound::WavWriter<BufWriter<std::fs::File>>>>>,
     path: PathBuf,
     started_at: Instant,
+    recording_mode: String,
     pre_recording_clipboard_context: Option<String>,
     insertion_target_app: Option<String>,
 }
@@ -254,7 +300,7 @@ enum AppError {
 }
 
 impl RecorderSession {
-    fn stop(self) -> Result<(PathBuf, Duration, Option<String>, Option<String>), AppError> {
+    fn stop(self) -> Result<(PathBuf, Duration, String, Option<String>, Option<String>), AppError> {
         let elapsed = self.started_at.elapsed();
         drop(self.stream);
         let mut writer_lock = self
@@ -269,6 +315,7 @@ impl RecorderSession {
         Ok((
             self.path,
             elapsed,
+            self.recording_mode,
             self.pre_recording_clipboard_context,
             self.insertion_target_app,
         ))
@@ -320,6 +367,15 @@ fn get_runtime_status(state: State<AppState>) -> RuntimeStatus {
 }
 
 #[tauri::command]
+fn get_debug_log(state: State<AppState>) -> Vec<String> {
+    state
+        .debug_log
+        .lock()
+        .map(|entries| entries.clone())
+        .unwrap_or_default()
+}
+
+#[tauri::command]
 fn get_transcript_history(state: State<AppState>) -> Vec<TranscriptHistoryEntry> {
     state
         .transcript_history
@@ -368,19 +424,31 @@ fn copy_text_to_clipboard(text: String) -> Result<(), String> {
 
 #[tauri::command]
 fn save_settings(app: AppHandle, state: State<AppState>, settings: Settings) -> Result<(), String> {
-    let normalized_hotkey = settings.hotkey.trim().to_string();
-    if normalized_hotkey.is_empty() {
-        return Err("Hotkey cannot be empty".to_string());
+    let normalized_hold_hotkey = settings.hold_hotkey.trim().to_string();
+    let normalized_toggle_hotkey = settings.toggle_hotkey.trim().to_string();
+    if normalized_hold_hotkey.is_empty() {
+        return Err("Hold to speak shortcut cannot be empty.".to_string());
+    }
+    if normalized_toggle_hotkey.is_empty() {
+        return Err("Hands-free shortcut cannot be empty.".to_string());
+    }
+    if normalized_hold_hotkey.eq_ignore_ascii_case(&normalized_toggle_hotkey) {
+        return Err("Hold to speak and hands-free shortcuts must be different.".to_string());
     }
     let normalized_mode = normalize_recording_mode(&settings.recording_mode);
     let normalized_language = normalize_transcription_language(&settings.language);
     let mut normalized_settings = settings.clone();
-    normalized_settings.hotkey = normalized_hotkey.clone();
+    normalized_settings.hold_hotkey = normalized_hold_hotkey.clone();
+    normalized_settings.toggle_hotkey = normalized_toggle_hotkey.clone();
     normalized_settings.recording_mode = normalized_mode.clone();
     normalized_settings.language = normalized_language.clone();
 
-    let registration = register_shortcut_with_fallback(&app, &state, &normalized_settings.hotkey)?;
-    normalized_settings.hotkey = registration.active_hotkey.clone();
+    register_shortcuts_strict(
+        &app,
+        &state,
+        &normalized_settings.hold_hotkey,
+        &normalized_settings.toggle_hotkey,
+    )?;
 
     {
         let mut lock = state
@@ -391,22 +459,24 @@ fn save_settings(app: AppHandle, state: State<AppState>, settings: Settings) -> 
     }
 
     persist_settings(&app, &normalized_settings).map_err(|e| e.to_string())?;
-    let status_message = match registration.fallback_from {
-        Some(requested_hotkey) => format!(
-            "Requested hotkey '{}' was unavailable. Applied fallback '{}' and saved it. Mode: {} | Language: {}",
-            requested_hotkey,
-            normalized_settings.hotkey,
-            recording_mode_label(&normalized_settings.recording_mode),
-            transcription_language_label(&normalized_settings.language),
+    debug_log_state(
+        &state,
+        format!(
+            "settings_saved hold_hotkey={} toggle_hotkey={} manual_mode={} language={}",
+            normalized_settings.hold_hotkey,
+            normalized_settings.toggle_hotkey,
+            normalized_settings.recording_mode,
+            normalized_settings.language
         ),
-        None => format!(
-            "Settings saved. Hotkey: {} | Mode: {} | Language: {}",
-            normalized_settings.hotkey,
-            recording_mode_label(&normalized_settings.recording_mode),
-            transcription_language_label(&normalized_settings.language),
-        ),
-    };
-    set_status(&app, &state, None, None, None, status_message);
+    );
+    set_status(
+        &app,
+        &state,
+        None,
+        None,
+        None,
+        "Settings saved.".to_string(),
+    );
     Ok(())
 }
 
@@ -478,71 +548,24 @@ async fn test_api_connection(state: State<'_, AppState>) -> Result<String, Strin
 fn check_accessibility_permission() -> AccessibilityPermissionStatus {
     #[cfg(target_os = "macos")]
     {
-        let output = Command::new("osascript")
-            .arg("-e")
-            .arg("tell application \"System Events\" to return UI elements enabled")
-            .output();
-
-        match output {
-            Ok(result) if result.status.success() => {
-                let response = String::from_utf8_lossy(&result.stdout).trim().to_lowercase();
-                if response == "true" {
-                    AccessibilityPermissionStatus {
-                        platform: "macOS".to_string(),
-                        is_supported: true,
-                        is_granted: true,
-                        status: "granted".to_string(),
-                        guidance: "Accessibility permission is granted.".to_string(),
-                    }
-                } else if response == "false" {
-                    AccessibilityPermissionStatus {
-                        platform: "macOS".to_string(),
-                        is_supported: true,
-                        is_granted: false,
-                        status: "missing".to_string(),
-                        guidance: "Accessibility permission is not granted. Open System Settings > Privacy & Security > Accessibility and enable Typeless Lite."
-                            .to_string(),
-                    }
-                } else {
-                    AccessibilityPermissionStatus {
-                        platform: "macOS".to_string(),
-                        is_supported: true,
-                        is_granted: false,
-                        status: "unknown".to_string(),
-                        guidance: format!(
-                            "Could not determine permission status (unexpected response: '{response}'). Open Accessibility settings and verify Typeless Lite is enabled."
-                        ),
-                    }
-                }
+        let is_trusted = unsafe { AXIsProcessTrusted() } != 0;
+        if is_trusted {
+            AccessibilityPermissionStatus {
+                platform: "macOS".to_string(),
+                is_supported: true,
+                is_granted: true,
+                status: "granted".to_string(),
+                guidance: "Accessibility permission is granted.".to_string(),
             }
-            Ok(result) => {
-                let stderr = String::from_utf8_lossy(&result.stderr).trim().to_string();
-                AccessibilityPermissionStatus {
-                    platform: "macOS".to_string(),
-                    is_supported: true,
-                    is_granted: false,
-                    status: "error".to_string(),
-                    guidance: format!(
-                        "Permission check failed. Open Accessibility settings and verify Typeless Lite is enabled. {}",
-                        if stderr.is_empty() {
-                            "".to_string()
-                        } else {
-                            format!("Details: {stderr}")
-                        }
-                    )
-                    .trim()
-                    .to_string(),
-                }
-            }
-            Err(error) => AccessibilityPermissionStatus {
+        } else {
+            AccessibilityPermissionStatus {
                 platform: "macOS".to_string(),
                 is_supported: true,
                 is_granted: false,
-                status: "error".to_string(),
-                guidance: format!(
-                    "Permission check failed to run. Open Accessibility settings manually and verify Typeless Lite is enabled. Details: {error}"
-                ),
-            },
+                status: "missing".to_string(),
+                guidance: "Accessibility permission is not granted. Open System Settings > Privacy & Security > Accessibility and enable Typeless Lite."
+                    .to_string(),
+            }
         }
     }
 
@@ -720,6 +743,23 @@ fn now_epoch_ms() -> u64 {
         .unwrap_or(0)
 }
 
+fn debug_log_state(state: &State<'_, AppState>, message: impl Into<String>) {
+    let line = format!("[{}] {}", now_epoch_ms(), message.into());
+    eprintln!("[typeless-lite] {line}");
+    if let Ok(mut entries) = state.debug_log.lock() {
+        entries.push(line);
+        if entries.len() > DEBUG_LOG_LIMIT {
+            let overflow = entries.len() - DEBUG_LOG_LIMIT;
+            entries.drain(0..overflow);
+        }
+    }
+}
+
+fn debug_log_handle(app: &AppHandle, message: impl Into<String>) {
+    let state: State<AppState> = app.state();
+    debug_log_state(&state, message);
+}
+
 fn push_transcript_history_entry(
     app: &AppHandle,
     state: &State<'_, AppState>,
@@ -800,14 +840,6 @@ fn normalize_recording_mode(mode: &str) -> String {
     }
 }
 
-fn recording_mode_label(mode: &str) -> &'static str {
-    if mode.eq_ignore_ascii_case("toggle") {
-        "Toggle start/stop"
-    } else {
-        "Hold to record"
-    }
-}
-
 fn normalize_transcription_language(language: &str) -> String {
     let normalized = language.trim();
     const ALLOWED_LANGUAGES: [&str; 9] =
@@ -823,20 +855,6 @@ fn normalize_transcription_language(language: &str) -> String {
         }
     } else {
         "auto".to_string()
-    }
-}
-
-fn transcription_language_label(language: &str) -> &'static str {
-    match language {
-        "en" => "English (en)",
-        "zh" => "Chinese Simplified (zh)",
-        "zh-TW" => "Chinese Traditional (zh-TW)",
-        "ja" => "Japanese (ja)",
-        "ko" => "Korean (ko)",
-        "es" => "Spanish (es)",
-        "fr" => "French (fr)",
-        "de" => "German (de)",
-        _ => "Auto",
     }
 }
 
@@ -906,76 +924,298 @@ fn update_tray_status(app: &AppHandle, status: &RuntimeStatus) {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RecordingModeKind {
+    Hold,
+    Toggle,
+}
+
+impl RecordingModeKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Hold => "hold",
+            Self::Toggle => "toggle",
+        }
+    }
+
+    fn shortcut_label(self) -> &'static str {
+        match self {
+            Self::Hold => "Hold to speak shortcut",
+            Self::Toggle => "Hands-free shortcut",
+        }
+    }
+
+    fn start_hint(self) -> &'static str {
+        match self {
+            Self::Hold => "Recording... release the hold shortcut or click stop.",
+            Self::Toggle => "Recording... press the toggle shortcut again or click stop.",
+        }
+    }
+}
+
+#[derive(Clone)]
+struct ShortcutBindingRegistration {
+    requested_hotkey: String,
+    shortcut: Shortcut,
+}
+
 struct ShortcutRegistrationResult {
-    active_hotkey: String,
-    fallback_from: Option<String>,
+    hold: ShortcutBindingRegistration,
+    toggle: ShortcutBindingRegistration,
 }
 
-#[cfg(target_os = "macos")]
-fn platform_hotkey_fallbacks() -> &'static [&'static str] {
-    &["Cmd+Shift+Space", "Cmd+Option+Space", "Cmd+Shift+V"]
+fn unregister_registered_shortcuts(app: &AppHandle, registered: &mut RegisteredShortcuts) {
+    if let Some(shortcut) = registered.hold.take() {
+        let _ = app.global_shortcut().unregister(shortcut);
+    }
+    if let Some(shortcut) = registered.toggle.take() {
+        let _ = app.global_shortcut().unregister(shortcut);
+    }
 }
 
-#[cfg(not(target_os = "macos"))]
-fn platform_hotkey_fallbacks() -> &'static [&'static str] {
-    &["Ctrl+Shift+Space", "Ctrl+Alt+Space", "Ctrl+Shift+V"]
+fn parse_shortcut_binding(
+    state: &State<AppState>,
+    requested_hotkey: &str,
+    mode: RecordingModeKind,
+) -> Result<ShortcutBindingRegistration, String> {
+    let trimmed = requested_hotkey.trim();
+    match trimmed.parse::<Shortcut>() {
+        Ok(shortcut) => {
+            validate_shortcut_policy(&shortcut, mode)?;
+            Ok(ShortcutBindingRegistration {
+                requested_hotkey: trimmed.to_string(),
+                shortcut,
+            })
+        }
+        Err(error) => {
+            debug_log_state(
+                state,
+                format!(
+                    "shortcut_parse_failed mode={} requested={} error={}",
+                    mode.as_str(),
+                    trimmed,
+                    error
+                ),
+            );
+            Err(format!(
+                "{} is invalid. Use one modifier and one supported key.",
+                mode.shortcut_label()
+            ))
+        }
+    }
 }
 
-fn register_shortcut_with_fallback(
+fn shortcut_modifier_count(shortcut: &Shortcut) -> usize {
+    [
+        Modifiers::SHIFT,
+        Modifiers::CONTROL,
+        Modifiers::ALT,
+        Modifiers::SUPER,
+    ]
+    .into_iter()
+    .filter(|modifier| shortcut.mods.contains(*modifier))
+    .count()
+}
+
+fn is_function_key(code: Code) -> bool {
+    matches!(
+        code,
+        Code::F1
+            | Code::F2
+            | Code::F3
+            | Code::F4
+            | Code::F5
+            | Code::F6
+            | Code::F7
+            | Code::F8
+            | Code::F9
+            | Code::F10
+            | Code::F11
+            | Code::F12
+            | Code::F13
+            | Code::F14
+            | Code::F15
+            | Code::F16
+            | Code::F17
+            | Code::F18
+            | Code::F19
+            | Code::F20
+            | Code::F21
+            | Code::F22
+            | Code::F23
+            | Code::F24
+    )
+}
+
+fn validate_shortcut_policy(shortcut: &Shortcut, mode: RecordingModeKind) -> Result<(), String> {
+    if shortcut_modifier_count(shortcut) >= 2 || is_function_key(shortcut.key) {
+        return Ok(());
+    }
+
+    Err(format!(
+        "{} must use two modifiers or an F key.",
+        mode.shortcut_label()
+    ))
+}
+
+fn register_shortcut_binding(
     app: &AppHandle,
     state: &State<AppState>,
-    hotkey: &str,
+    binding: ShortcutBindingRegistration,
+    mode: RecordingModeKind,
+) -> Result<ShortcutBindingRegistration, String> {
+    match app.global_shortcut().register(binding.shortcut) {
+        Ok(()) => Ok(binding),
+        Err(error) => {
+            debug_log_state(
+                state,
+                format!(
+                    "shortcut_register_failed mode={} requested={} error={}",
+                    mode.as_str(),
+                    binding.requested_hotkey,
+                    error
+                ),
+            );
+            Err(format!(
+                "{} isn't available right now. Choose another shortcut.",
+                mode.shortcut_label()
+            ))
+        }
+    }
+}
+
+fn restore_registered_shortcuts(
+    app: &AppHandle,
+    state: &State<AppState>,
+    previous: RegisteredShortcuts,
+) -> RegisteredShortcuts {
+    let mut restored = RegisteredShortcuts::default();
+
+    if let Some(shortcut) = previous.hold {
+        match app.global_shortcut().register(shortcut) {
+            Ok(()) => restored.hold = Some(shortcut),
+            Err(error) => debug_log_state(
+                state,
+                format!("shortcut_restore_failed mode=hold shortcut={} error={}", shortcut, error),
+            ),
+        }
+    }
+
+    if let Some(shortcut) = previous.toggle {
+        match app.global_shortcut().register(shortcut) {
+            Ok(()) => restored.toggle = Some(shortcut),
+            Err(error) => debug_log_state(
+                state,
+                format!(
+                    "shortcut_restore_failed mode=toggle shortcut={} error={}",
+                    shortcut, error
+                ),
+            ),
+        }
+    }
+
+    restored
+}
+
+fn register_shortcuts_strict(
+    app: &AppHandle,
+    state: &State<AppState>,
+    hold_hotkey: &str,
+    toggle_hotkey: &str,
 ) -> Result<ShortcutRegistrationResult, String> {
-    if let Ok(mut lock) = state.current_shortcut.lock() {
-        if let Some(existing) = lock.take() {
-            let _ = app.global_shortcut().unregister(existing);
+    let hold = parse_shortcut_binding(state, hold_hotkey, RecordingModeKind::Hold)?;
+    let toggle = parse_shortcut_binding(state, toggle_hotkey, RecordingModeKind::Toggle)?;
+    if hold.shortcut == toggle.shortcut {
+        return Err("Hold to speak and hands-free shortcuts must be different.".to_string());
+    }
+
+    let mut lock = state
+        .current_shortcuts
+        .lock()
+        .map_err(|_| "Failed to lock shortcut state".to_string())?;
+    let previous = *lock;
+    unregister_registered_shortcuts(app, &mut lock);
+
+    let hold = match register_shortcut_binding(app, state, hold, RecordingModeKind::Hold) {
+        Ok(binding) => binding,
+        Err(error) => {
+            *lock = restore_registered_shortcuts(app, state, previous);
+            return Err(error);
         }
-
-        let mut candidates: Vec<String> = vec![hotkey.to_string()];
-        for fallback in platform_hotkey_fallbacks() {
-            if !candidates.iter().any(|candidate| candidate == fallback) {
-                candidates.push((*fallback).to_string());
-            }
+    };
+    let toggle = match register_shortcut_binding(app, state, toggle, RecordingModeKind::Toggle) {
+        Ok(binding) => binding,
+        Err(error) => {
+            let _ = app.global_shortcut().unregister(hold.shortcut);
+            *lock = restore_registered_shortcuts(app, state, previous);
+            return Err(error);
         }
+    };
 
-        let mut failures: Vec<String> = Vec::new();
+    *lock = RegisteredShortcuts {
+        hold: Some(hold.shortcut),
+        toggle: Some(toggle.shortcut),
+    };
 
-        for candidate in candidates {
-            let shortcut = match candidate.parse::<Shortcut>() {
-                Ok(shortcut) => shortcut,
-                Err(e) => {
-                    failures.push(format!("'{candidate}': {e}"));
-                    continue;
-                }
-            };
+    Ok(ShortcutRegistrationResult { hold, toggle })
+}
 
-            match app.global_shortcut().register(shortcut) {
-                Ok(()) => {
-                    *lock = Some(shortcut);
-                    let fallback_from = if candidate == hotkey {
-                        None
-                    } else {
-                        Some(hotkey.to_string())
-                    };
-                    return Ok(ShortcutRegistrationResult {
-                        active_hotkey: candidate,
-                        fallback_from,
-                    });
-                }
-                Err(e) => failures.push(format!("'{candidate}': {e}")),
-            }
-        }
-
-        Err(format!(
-            "Failed to register hotkey. Attempted: {}",
-            failures.join(" | ")
-        ))
+fn recording_mode_from_settings(settings: &Settings) -> RecordingModeKind {
+    if is_toggle_mode(settings) {
+        RecordingModeKind::Toggle
     } else {
-        Err("Failed to lock shortcut state".to_string())
+        RecordingModeKind::Hold
+    }
+}
+
+fn active_recording_mode(state: &State<'_, AppState>) -> Option<RecordingModeKind> {
+    let lock = state.recorder.lock().ok()?;
+    let session = lock.as_ref()?;
+    Some(if session.recording_mode.eq_ignore_ascii_case("toggle") {
+        RecordingModeKind::Toggle
+    } else {
+        RecordingModeKind::Hold
+    })
+}
+
+fn handle_shortcut_event(
+    app: &AppHandle,
+    state: &State<'_, AppState>,
+    mode: RecordingModeKind,
+    event_state: ShortcutState,
+) {
+    match active_recording_mode(state) {
+        Some(active_mode) if active_mode != mode => {}
+        Some(RecordingModeKind::Hold) if event_state == ShortcutState::Released => {
+            let _ = toggle_recording_with_mode(app, state, RecordingModeKind::Hold);
+        }
+        Some(RecordingModeKind::Toggle) if event_state == ShortcutState::Pressed => {
+            let _ = toggle_recording_with_mode(app, state, RecordingModeKind::Toggle);
+        }
+        None if mode == RecordingModeKind::Hold && event_state == ShortcutState::Pressed => {
+            let _ = toggle_recording_with_mode(app, state, RecordingModeKind::Hold);
+        }
+        None if mode == RecordingModeKind::Toggle && event_state == ShortcutState::Pressed => {
+            let _ = toggle_recording_with_mode(app, state, RecordingModeKind::Toggle);
+        }
+        _ => {}
     }
 }
 
 fn toggle_recording_inner(app: &AppHandle, state: &State<AppState>) -> Result<(), String> {
+    let mode = state
+        .settings
+        .lock()
+        .map(|settings| recording_mode_from_settings(&settings))
+        .unwrap_or(RecordingModeKind::Hold);
+    toggle_recording_with_mode(app, state, mode)
+}
+
+fn toggle_recording_with_mode(
+    app: &AppHandle,
+    state: &State<AppState>,
+    mode: RecordingModeKind,
+) -> Result<(), String> {
     let maybe_session = {
         let mut lock = state
             .recorder
@@ -984,40 +1224,50 @@ fn toggle_recording_inner(app: &AppHandle, state: &State<AppState>) -> Result<()
         if lock.is_some() {
             lock.take()
         } else {
-            let (mode_hint, include_clipboard_context) = state
+            let include_clipboard_context = state
                 .settings
                 .lock()
-                .map(|settings| {
-                    let hint = if is_toggle_mode(&settings) {
-                        "Recording... press hotkey again to stop (or toggle manually).".to_string()
-                    } else {
-                        "Recording... release hotkey to stop (or toggle manually).".to_string()
-                    };
-                    (hint, settings.include_clipboard_context)
-                })
-                .unwrap_or_else(|_| {
-                    (
-                        "Recording... release hotkey to stop (or toggle manually).".to_string(),
-                        false,
-                    )
-                });
+                .map(|settings| settings.include_clipboard_context)
+                .unwrap_or(false);
             let pre_recording_clipboard_context = if include_clipboard_context {
                 capture_selected_text_context_on_record_start()
             } else {
                 None
             };
-            let session =
-                start_recording(app, pre_recording_clipboard_context).map_err(|e| e.to_string())?;
+            let session = start_recording(app, mode, pre_recording_clipboard_context)
+                .map_err(|e| e.to_string())?;
             *lock = Some(session);
-            set_status(app, state, Some(true), Some(false), Some(0), mode_hint);
+            debug_log_handle(
+                app,
+                format!(
+                    "recording_started mode={} target_app={}",
+                    mode.as_str(),
+                    lock.as_ref()
+                        .and_then(|session| session.insertion_target_app.as_deref())
+                        .unwrap_or("none")
+                ),
+            );
+            set_status(
+                app,
+                state,
+                Some(true),
+                Some(false),
+                Some(0),
+                mode.start_hint().to_string(),
+            );
             play_earcon_if_enabled(state, Earcon::Start);
             return Ok(());
         }
     };
 
     if let Some(session) = maybe_session {
-        let (wav_path, elapsed, pre_recording_clipboard_context, insertion_target_app) =
-            session.stop().map_err(|e| e.to_string())?;
+        let (
+            wav_path,
+            elapsed,
+            recording_mode,
+            pre_recording_clipboard_context,
+            insertion_target_app,
+        ) = session.stop().map_err(|e| e.to_string())?;
         if elapsed.as_millis() < MIN_RECORDING_MS {
             let _ = fs::remove_file(&wav_path);
             set_status(
@@ -1045,16 +1295,16 @@ fn toggle_recording_inner(app: &AppHandle, state: &State<AppState>) -> Result<()
         let processing_started_at = Instant::now();
         tauri::async_runtime::spawn(async move {
             let app_state: State<AppState> = app_handle.state();
-            if let Err(err) =
-                process_audio_pipeline(
-                    &app_handle,
-                    &app_state,
-                    wav_path,
-                    pre_recording_clipboard_context,
-                    insertion_target_app,
-                    processing_started_at,
-                )
-                .await
+            if let Err(err) = process_audio_pipeline(
+                &app_handle,
+                &app_state,
+                wav_path,
+                recording_mode,
+                pre_recording_clipboard_context,
+                insertion_target_app,
+                processing_started_at,
+            )
+            .await
             {
                 let draft_hint = app_state
                     .durable_draft
@@ -1081,6 +1331,7 @@ fn toggle_recording_inner(app: &AppHandle, state: &State<AppState>) -> Result<()
 
 fn start_recording(
     app: &AppHandle,
+    recording_mode: RecordingModeKind,
     pre_recording_clipboard_context: Option<String>,
 ) -> Result<RecorderSession, AppError> {
     let host = cpal::default_host();
@@ -1168,13 +1419,24 @@ fn start_recording(
         .play()
         .map_err(|e| AppError::Message(format!("Failed starting input stream: {e}")))?;
 
+    let insertion_target_app = capture_insertion_target_app(app);
+    debug_log_handle(
+        app,
+        format!(
+            "capture_target_app mode={} frontmost_target={}",
+            recording_mode.as_str(),
+            insertion_target_app.as_deref().unwrap_or("none")
+        ),
+    );
+
     Ok(RecorderSession {
         stream,
         writer,
         path,
         started_at: Instant::now(),
+        recording_mode: recording_mode.as_str().to_string(),
         pre_recording_clipboard_context,
-        insertion_target_app: capture_insertion_target_app(app),
+        insertion_target_app,
     })
 }
 
@@ -1184,17 +1446,27 @@ fn write_samples_f32(
     mic_meter: &MicMeterContext,
 ) {
     let mut peak = 0.0_f32;
+    let mut sum_sq = 0.0_f32;
+    let mut count = 0_usize;
     if let Ok(mut lock) = writer.lock() {
         if let Some(w) = lock.as_mut() {
             for sample in input {
                 let clamped = sample.clamp(-1.0, 1.0);
-                peak = peak.max(clamped.abs());
+                let normalized = clamped.abs();
+                peak = peak.max(normalized);
+                sum_sq += clamped * clamped;
+                count += 1;
                 let s = (clamped * i16::MAX as f32) as i16;
                 let _ = w.write_sample(s);
             }
         }
     }
-    maybe_emit_mic_level((peak * 100.0).round() as u8, mic_meter);
+    let rms = if count > 0 {
+        (sum_sq / count as f32).sqrt()
+    } else {
+        0.0
+    };
+    maybe_emit_mic_level(meter_target_percent(peak, rms), mic_meter);
 }
 
 fn write_samples_i16(
@@ -1203,16 +1475,26 @@ fn write_samples_i16(
     mic_meter: &MicMeterContext,
 ) {
     let mut peak = 0_i32;
+    let mut sum_sq = 0.0_f32;
+    let mut count = 0_usize;
     if let Ok(mut lock) = writer.lock() {
         if let Some(w) = lock.as_mut() {
             for sample in input {
                 peak = peak.max((*sample as i32).unsigned_abs() as i32);
+                let normalized = (*sample as f32 / i16::MAX as f32).clamp(-1.0, 1.0);
+                sum_sq += normalized * normalized;
+                count += 1;
                 let _ = w.write_sample(*sample);
             }
         }
     }
-    let level = ((peak as f32 / i16::MAX as f32) * 100.0).round() as u8;
-    maybe_emit_mic_level(level, mic_meter);
+    let rms = if count > 0 {
+        (sum_sq / count as f32).sqrt()
+    } else {
+        0.0
+    };
+    let peak_normalized = (peak as f32 / i16::MAX as f32).clamp(0.0, 1.0);
+    maybe_emit_mic_level(meter_target_percent(peak_normalized, rms), mic_meter);
 }
 
 fn write_samples_u16(
@@ -1221,27 +1503,54 @@ fn write_samples_u16(
     mic_meter: &MicMeterContext,
 ) {
     let mut peak = 0_i32;
+    let mut sum_sq = 0.0_f32;
+    let mut count = 0_usize;
     if let Ok(mut lock) = writer.lock() {
         if let Some(w) = lock.as_mut() {
             for sample in input {
                 let shifted = (*sample as i32 - 32768) as i16;
                 peak = peak.max((shifted as i32).unsigned_abs() as i32);
+                let normalized = (shifted as f32 / i16::MAX as f32).clamp(-1.0, 1.0);
+                sum_sq += normalized * normalized;
+                count += 1;
                 let _ = w.write_sample(shifted);
             }
         }
     }
-    let level = ((peak as f32 / i16::MAX as f32) * 100.0).round() as u8;
-    maybe_emit_mic_level(level, mic_meter);
+    let rms = if count > 0 {
+        (sum_sq / count as f32).sqrt()
+    } else {
+        0.0
+    };
+    let peak_normalized = (peak as f32 / i16::MAX as f32).clamp(0.0, 1.0);
+    maybe_emit_mic_level(meter_target_percent(peak_normalized, rms), mic_meter);
 }
 
-fn maybe_emit_mic_level(level: u8, mic_meter: &MicMeterContext) {
+fn meter_target_percent(peak: f32, rms: f32) -> f32 {
+    let blended = (rms.clamp(0.0, 1.0) * 0.82).max(peak.clamp(0.0, 1.0) * 0.45);
+    if blended <= 0.000_1 {
+        return 0.0;
+    }
+
+    let db = 20.0 * blended.max(0.000_1).log10();
+    let normalized = ((db - MIC_METER_FLOOR_DB) / (MIC_METER_CEILING_DB - MIC_METER_FLOOR_DB))
+        .clamp(0.0, 1.0);
+    normalized.powf(0.72) * 100.0
+}
+
+fn maybe_emit_mic_level(level: f32, mic_meter: &MicMeterContext) {
     let Ok(mut state) = mic_meter.meter.lock() else {
         return;
     };
 
     let now = Instant::now();
-    state.smoothed_level = (state.smoothed_level * 0.65) + ((level.min(100) as f32) * 0.35);
-    if now.duration_since(state.last_emit_at) < Duration::from_millis(75) {
+    let target = level.clamp(0.0, 100.0);
+    let smoothing = if target > state.smoothed_level { 0.58 } else { 0.18 };
+    state.smoothed_level += (target - state.smoothed_level) * smoothing;
+    if state.smoothed_level < 0.4 && target < 0.4 {
+        state.smoothed_level = 0.0;
+    }
+    if now.duration_since(state.last_emit_at) < Duration::from_millis(MIC_METER_EMIT_INTERVAL_MS) {
         return;
     }
     state.last_emit_at = now;
@@ -1252,6 +1561,7 @@ async fn process_audio_pipeline(
     app: &AppHandle,
     state: &State<'_, AppState>,
     wav_path: PathBuf,
+    recording_mode: String,
     pre_recording_clipboard_context: Option<String>,
     insertion_target_app: Option<String>,
     processing_started_at: Instant,
@@ -1276,6 +1586,15 @@ async fn process_audio_pipeline(
         } else {
             None
         };
+        debug_log_state(
+            state,
+            format!(
+                "pipeline_started mode={} target_app={} clipboard_context={}",
+                recording_mode,
+                active_app_name.as_deref().unwrap_or("none"),
+                clipboard_reference.is_some()
+            ),
+        );
         let transcription = transcribe_audio(
             &state.http_client,
             &settings,
@@ -1289,7 +1608,7 @@ async fn process_audio_pipeline(
             Some(DurableDraft {
                 text: transcription.clone(),
                 created_at_ms: now_epoch_ms(),
-                recording_mode: normalize_recording_mode(&settings.recording_mode),
+                recording_mode: normalize_recording_mode(&recording_mode),
                 language: normalize_transcription_language(&settings.language),
                 source_app: active_app_name.clone(),
             }),
@@ -1343,7 +1662,7 @@ async fn process_audio_pipeline(
             inserted_message,
             output_text,
             active_app_name,
-            settings.recording_mode.clone(),
+            recording_mode,
             settings.language.clone(),
         ))
     };
@@ -1433,7 +1752,8 @@ async fn transcribe_audio(
                     .text()
                     .await
                     .unwrap_or_else(|_| "<no body>".to_string());
-                let should_retry = is_retryable_status(status) && attempt + 1 < API_RETRY_MAX_ATTEMPTS;
+                let should_retry =
+                    is_retryable_status(status) && attempt + 1 < API_RETRY_MAX_ATTEMPTS;
                 if should_retry {
                     tokio::time::sleep(Duration::from_millis(retry_backoff_ms(attempt))).await;
                     continue;
@@ -1555,7 +1875,9 @@ async fn format_transcript(
                     .first()
                     .map(|c| c.message.content.trim().to_string())
                     .filter(|s| !s.is_empty())
-                    .ok_or_else(|| AppError::Message("No formatter output text received".to_string()))?;
+                    .ok_or_else(|| {
+                        AppError::Message("No formatter output text received".to_string())
+                    })?;
                 if formatter_output_passes_safety_check(transcript, &content) {
                     return Ok(FormatterResult {
                         text: content,
@@ -1782,7 +2104,22 @@ fn capture_insertion_target_app(_app: &AppHandle) -> Option<String> {
 
 fn is_terminal_like_app(app_name: &str) -> bool {
     let lower = app_name.to_ascii_lowercase();
-    ["terminal", "iterm", "warp", "wezterm", "alacritty", "kitty"]
+    [
+        "terminal",
+        "iterm",
+        "warp",
+        "wezterm",
+        "alacritty",
+        "kitty",
+        "tmux",
+        "cmux",
+        "zellij",
+        "screen",
+        "nvim",
+        "vim",
+        "helix",
+        "hx",
+    ]
         .iter()
         .any(|needle| lower.contains(needle))
 }
@@ -1793,12 +2130,302 @@ fn applescript_escape(input: &str) -> String {
 }
 
 #[cfg(target_os = "macos")]
+type AXUIElementRef = *const std::ffi::c_void;
+#[cfg(target_os = "macos")]
+type AXValueRef = *const std::ffi::c_void;
+#[cfg(target_os = "macos")]
+type AXError = i32;
+#[cfg(target_os = "macos")]
+type AXValueType = u32;
+
+#[cfg(target_os = "macos")]
+const K_AX_ERROR_SUCCESS: AXError = 0;
+#[cfg(target_os = "macos")]
+const K_AX_VALUE_ILLEGAL_TYPE: AXValueType = 0;
+#[cfg(target_os = "macos")]
+const K_AX_VALUE_CF_RANGE_TYPE: AXValueType = 4;
+
+#[cfg(target_os = "macos")]
+#[link(name = "ApplicationServices", kind = "framework")]
+unsafe extern "C" {
+    fn AXIsProcessTrusted() -> Boolean;
+    fn AXUIElementCreateSystemWide() -> AXUIElementRef;
+    fn AXUIElementCopyAttributeValue(
+        element: AXUIElementRef,
+        attribute: CFStringRef,
+        value: *mut CFTypeRef,
+    ) -> AXError;
+    fn AXUIElementIsAttributeSettable(
+        element: AXUIElementRef,
+        attribute: CFStringRef,
+        settable: *mut Boolean,
+    ) -> AXError;
+    fn AXUIElementSetAttributeValue(
+        element: AXUIElementRef,
+        attribute: CFStringRef,
+        value: CFTypeRef,
+    ) -> AXError;
+    fn AXValueCreate(value_type: AXValueType, value_ptr: *const std::ffi::c_void) -> AXValueRef;
+    fn AXValueGetTypeID() -> CFTypeID;
+    fn AXValueGetType(value: AXValueRef) -> AXValueType;
+    fn AXValueGetValue(
+        value: AXValueRef,
+        value_type: AXValueType,
+        value_ptr: *mut std::ffi::c_void,
+    ) -> Boolean;
+}
+
+#[cfg(target_os = "macos")]
+fn ax_error_label(error: AXError) -> &'static str {
+    match error {
+        0 => "success",
+        -25200 => "failure",
+        -25201 => "illegal argument",
+        -25202 => "invalid ui element",
+        -25203 => "invalid ui element observer",
+        -25204 => "cannot complete",
+        -25205 => "attribute unsupported",
+        -25206 => "action unsupported",
+        -25207 => "notification unsupported",
+        -25208 => "not implemented",
+        -25209 => "notification already registered",
+        -25210 => "notification not registered",
+        -25211 => "api disabled",
+        -25212 => "no value",
+        -25213 => "parameterized attribute unsupported",
+        -25214 => "not enough precision",
+        _ => "unknown ax error",
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn copy_ax_attribute(element: AXUIElementRef, attribute_name: &str) -> Result<CFTypeRef, String> {
+    let attribute = CFString::new(attribute_name);
+    let mut value: CFTypeRef = std::ptr::null();
+    let error = unsafe {
+        AXUIElementCopyAttributeValue(element, attribute.as_concrete_TypeRef(), &mut value)
+    };
+    if error != K_AX_ERROR_SUCCESS {
+        return Err(format!(
+            "{attribute_name} read failed: {} ({error})",
+            ax_error_label(error)
+        ));
+    }
+    if value.is_null() {
+        return Err(format!("{attribute_name} returned null"));
+    }
+    Ok(value)
+}
+
+#[cfg(target_os = "macos")]
+fn is_ax_attribute_settable(element: AXUIElementRef, attribute_name: &str) -> Result<bool, String> {
+    let attribute = CFString::new(attribute_name);
+    let mut settable: Boolean = 0;
+    let error = unsafe {
+        AXUIElementIsAttributeSettable(element, attribute.as_concrete_TypeRef(), &mut settable)
+    };
+    if error != K_AX_ERROR_SUCCESS {
+        return Err(format!(
+            "{attribute_name} settable check failed: {} ({error})",
+            ax_error_label(error)
+        ));
+    }
+    Ok(settable != 0)
+}
+
+#[cfg(target_os = "macos")]
+fn cf_type_to_string(value: CFTypeRef) -> Result<String, String> {
+    if unsafe { CFGetTypeID(value) } != unsafe { CFStringGetTypeID() } {
+        unsafe {
+            CFRelease(value);
+        }
+        return Err("AXValue was not a string".to_string());
+    }
+    let value = unsafe { CFString::wrap_under_create_rule(value as CFStringRef) };
+    Ok(value.to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn cf_type_to_range(value: CFTypeRef) -> Result<CFRange, String> {
+    let value_type_id = unsafe { CFGetTypeID(value) };
+    let ax_value_type_id = unsafe { AXValueGetTypeID() };
+    if value_type_id != ax_value_type_id {
+        unsafe {
+            CFRelease(value);
+        }
+        return Err("AXSelectedTextRange was not an AXValue".to_string());
+    }
+
+    let ax_value_type = unsafe { AXValueGetType(value as AXValueRef) };
+    if ax_value_type == K_AX_VALUE_ILLEGAL_TYPE {
+        unsafe {
+            CFRelease(value);
+        }
+        return Err("AXSelectedTextRange used an illegal AXValue type".to_string());
+    }
+    if ax_value_type != K_AX_VALUE_CF_RANGE_TYPE {
+        unsafe {
+            CFRelease(value);
+        }
+        return Err(format!(
+            "AXSelectedTextRange used AXValue type {} instead of CFRange",
+            ax_value_type
+        ));
+    }
+
+    let mut range = CFRange {
+        location: 0,
+        length: 0,
+    };
+    let ok = unsafe {
+        AXValueGetValue(
+            value as AXValueRef,
+            K_AX_VALUE_CF_RANGE_TYPE,
+            (&mut range as *mut CFRange).cast(),
+        )
+    };
+    unsafe {
+        CFRelease(value);
+    }
+    if ok == 0 {
+        return Err("AXSelectedTextRange could not be decoded as CFRange".to_string());
+    }
+    Ok(range)
+}
+
+#[cfg(target_os = "macos")]
+fn char_to_byte_index(text: &str, char_index: usize) -> usize {
+    text.char_indices()
+        .map(|(byte_index, _)| byte_index)
+        .nth(char_index)
+        .unwrap_or(text.len())
+}
+
+#[cfg(target_os = "macos")]
+fn splice_text_at_range(text: &str, range: CFRange, inserted_text: &str) -> (String, isize) {
+    let start = range.location.max(0) as usize;
+    let length = range.length.max(0) as usize;
+    let start_byte = char_to_byte_index(text, start);
+    let end_byte = char_to_byte_index(text, start.saturating_add(length));
+    let mut next_value = String::with_capacity(
+        text.len()
+            .saturating_add(inserted_text.len())
+            .saturating_sub(end_byte - start_byte),
+    );
+    next_value.push_str(&text[..start_byte]);
+    next_value.push_str(inserted_text);
+    next_value.push_str(&text[end_byte..]);
+    let next_cursor = start as isize + inserted_text.chars().count() as isize;
+    (next_value, next_cursor)
+}
+
+#[cfg(target_os = "macos")]
+fn insert_text_via_accessibility(text: &str) -> Result<(), String> {
+    let system = unsafe { AXUIElementCreateSystemWide() };
+    if system.is_null() {
+        return Err("Failed to create system-wide AX element".to_string());
+    }
+
+    let focused_value = match copy_ax_attribute(system, "AXFocusedUIElement") {
+        Ok(value) => value,
+        Err(error) => {
+            unsafe {
+                CFRelease(system as CFTypeRef);
+            }
+            return Err(error);
+        }
+    };
+    unsafe {
+        CFRelease(system as CFTypeRef);
+    }
+    let focused_element = focused_value as AXUIElementRef;
+
+    let result = (|| {
+        if !is_ax_attribute_settable(focused_element, "AXValue")? {
+            return Err("AXValue is not settable on the focused element".to_string());
+        }
+
+        let current_value_ref = copy_ax_attribute(focused_element, "AXValue")?;
+        let current_value = cf_type_to_string(current_value_ref)?;
+        let selected_range_ref = copy_ax_attribute(focused_element, "AXSelectedTextRange")?;
+        let selected_range = cf_type_to_range(selected_range_ref)?;
+        let (next_value, next_cursor) = splice_text_at_range(&current_value, selected_range, text);
+
+        let next_value_cf = CFString::new(&next_value);
+        let value_attr = CFString::new("AXValue");
+        let set_value_error = unsafe {
+            AXUIElementSetAttributeValue(
+                focused_element,
+                value_attr.as_concrete_TypeRef(),
+                next_value_cf.as_CFTypeRef(),
+            )
+        };
+        if set_value_error != K_AX_ERROR_SUCCESS {
+            return Err(format!(
+                "AXValue write failed: {} ({set_value_error})",
+                ax_error_label(set_value_error)
+            ));
+        }
+
+        if is_ax_attribute_settable(focused_element, "AXSelectedTextRange")? {
+            let next_range = CFRange {
+                location: next_cursor,
+                length: 0,
+            };
+            let next_range_value = unsafe {
+                AXValueCreate(
+                    K_AX_VALUE_CF_RANGE_TYPE,
+                    (&next_range as *const CFRange).cast(),
+                )
+            };
+            if !next_range_value.is_null() {
+                let range_attr = CFString::new("AXSelectedTextRange");
+                let set_range_error = unsafe {
+                    AXUIElementSetAttributeValue(
+                        focused_element,
+                        range_attr.as_concrete_TypeRef(),
+                        next_range_value as CFTypeRef,
+                    )
+                };
+                unsafe {
+                    CFRelease(next_range_value as CFTypeRef);
+                }
+                if set_range_error != K_AX_ERROR_SUCCESS {
+                    return Err(format!(
+                        "AXSelectedTextRange write failed: {} ({set_range_error})",
+                        ax_error_label(set_range_error)
+                    ));
+                }
+            }
+        }
+
+        Ok(())
+    })();
+
+    unsafe {
+        CFRelease(focused_element as CFTypeRef);
+    }
+    result
+}
+
+#[cfg(target_os = "macos")]
 fn activate_target_app(app: &AppHandle, target_app_name: Option<&str>) -> Result<(), AppError> {
     let Some(target_app_name) = target_app_name else {
+        debug_log_handle(
+            app,
+            "activate_target_app skipped: no captured target".to_string(),
+        );
         return Ok(());
     };
 
     if is_current_app_name(app, target_app_name) {
+        debug_log_handle(
+            app,
+            format!(
+                "activate_target_app skipped: target '{}' is this app",
+                target_app_name
+            ),
+        );
         return Ok(());
     }
 
@@ -1806,9 +2433,24 @@ fn activate_target_app(app: &AppHandle, target_app_name: Option<&str>) -> Result
         .as_deref()
         .is_some_and(|frontmost| app_names_match(frontmost, target_app_name))
     {
+        debug_log_handle(
+            app,
+            format!(
+                "activate_target_app skipped: '{}' already frontmost",
+                target_app_name
+            ),
+        );
         return Ok(());
     }
 
+    debug_log_handle(
+        app,
+        format!(
+            "activate_target_app requested target='{}' current_frontmost='{}'",
+            target_app_name,
+            detect_frontmost_app_name().as_deref().unwrap_or("unknown")
+        ),
+    );
     let output = Command::new("osascript")
         .arg("-e")
         .arg(format!(
@@ -1831,6 +2473,14 @@ fn activate_target_app(app: &AppHandle, target_app_name: Option<&str>) -> Result
     }
 
     thread::sleep(Duration::from_millis(TARGET_APP_REFOCUS_DELAY_MS));
+    debug_log_handle(
+        app,
+        format!(
+            "activate_target_app completed target='{}' new_frontmost='{}'",
+            target_app_name,
+            detect_frontmost_app_name().as_deref().unwrap_or("unknown")
+        ),
+    );
     Ok(())
 }
 
@@ -1890,6 +2540,15 @@ fn paste_text(
     text: &str,
     insertion_target_app: Option<&str>,
 ) -> Result<(), AppError> {
+    debug_log_handle(
+        app,
+        format!(
+            "paste_text begin target_app={} frontmost_before={} chars={}",
+            insertion_target_app.unwrap_or("none"),
+            detect_frontmost_app_name().as_deref().unwrap_or("unknown"),
+            text.chars().count()
+        ),
+    );
     activate_target_app(app, insertion_target_app)?;
 
     #[cfg(target_os = "macos")]
@@ -1902,8 +2561,36 @@ fn paste_text(
                     .is_some_and(is_terminal_like_app)
             });
 
-        if target_is_terminal && type_text_via_applescript(text).is_ok() {
-            return Ok(());
+        if target_is_terminal {
+            debug_log_handle(app, "paste_text using terminal typing fallback".to_string());
+            match type_text_via_applescript(text) {
+                Ok(()) => {
+                    debug_log_handle(app, "terminal typing fallback succeeded".to_string());
+                    return Ok(());
+                }
+                Err(error) => {
+                    debug_log_handle(app, format!("terminal typing fallback failed: {}", error));
+                }
+            }
+        } else {
+            match insert_text_via_accessibility(text) {
+                Ok(()) => {
+                    debug_log_handle(
+                        app,
+                        format!(
+                            "accessibility text insertion succeeded frontmost_after={}",
+                            detect_frontmost_app_name().as_deref().unwrap_or("unknown")
+                        ),
+                    );
+                    return Ok(());
+                }
+                Err(error) => {
+                    debug_log_handle(
+                        app,
+                        format!("accessibility text insertion unavailable: {error}"),
+                    );
+                }
+            }
         }
     }
 
@@ -1920,6 +2607,10 @@ fn paste_text(
     clipboard
         .set_text(text.to_string())
         .map_err(|e| AppError::Message(format!("Clipboard write failed: {e}")))?;
+    debug_log_handle(
+        app,
+        "clipboard payload staged for paste fallback".to_string(),
+    );
 
     thread::sleep(Duration::from_millis(PRE_PASTE_DELAY_MS));
 
@@ -1936,18 +2627,18 @@ fn paste_text(
         Ok(paste_output) => !paste_output.status.success(),
         Err(_) => true,
     } {
+        debug_log_handle(app, "paste keystroke retry scheduled".to_string());
         thread::sleep(Duration::from_millis(PASTE_RETRY_BACKOFF_MS));
         output = run_paste_keystroke();
     }
     let output = output?;
-
-    restore_clipboard_after_delay(original_text, text.to_string());
 
     if !output.status.success() {
         #[cfg(target_os = "macos")]
         {
             let accessibility_status = check_accessibility_permission();
             if accessibility_status.is_supported && !accessibility_status.is_granted {
+                restore_clipboard_after_delay(original_text, text.to_string());
                 return Err(AppError::Message(
                     "Paste failed because Accessibility permission is missing. Open System Settings > Privacy & Security > Accessibility and enable Typeless Lite, then use the app's Open Accessibility Settings button to jump there."
                         .to_string(),
@@ -1956,11 +2647,25 @@ fn paste_text(
         }
 
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        debug_log_handle(
+            app,
+            format!("paste keystroke failed stderr={}", stderr.trim()),
+        );
+        restore_clipboard_after_delay(original_text, text.to_string());
         return Err(AppError::Message(format!(
             "Paste keystroke failed. Check Accessibility permissions. {stderr}"
         )));
     }
 
+    restore_clipboard_after_delay(original_text, text.to_string());
+
+    debug_log_handle(
+        app,
+        format!(
+            "clipboard paste fallback dispatched frontmost_after={}",
+            detect_frontmost_app_name().as_deref().unwrap_or("unknown")
+        ),
+    );
     Ok(())
 }
 
@@ -1994,47 +2699,30 @@ fn restore_clipboard_after_delay(original_text: Option<String>, temporary_text: 
     });
 }
 
-fn default_hotkey() -> Shortcut {
-    Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::Space)
-}
-
 fn main() {
     tauri::Builder::default()
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
                     let state: State<AppState> = app.state();
-                    let active_shortcut = state
-                        .current_shortcut
+                    let shortcuts = state
+                        .current_shortcuts
                         .lock()
-                        .ok()
-                        .and_then(|s| *s)
-                        .unwrap_or_else(default_hotkey);
+                        .map(|lock| *lock)
+                        .unwrap_or_default();
 
-                    if shortcut == &active_shortcut {
-                        let is_recording = state.recorder.lock().ok().is_some_and(|r| r.is_some());
-                        let mode = state
-                            .settings
-                            .lock()
-                            .map(|settings| normalize_recording_mode(&settings.recording_mode))
-                            .unwrap_or_else(|_| default_recording_mode());
-
-                        match mode.as_str() {
-                            "toggle" => {
-                                if event.state == ShortcutState::Pressed {
-                                    let _ = toggle_recording_inner(app, &state);
-                                }
-                            }
-                            _ => match event.state {
-                                ShortcutState::Pressed if !is_recording => {
-                                    let _ = toggle_recording_inner(app, &state);
-                                }
-                                ShortcutState::Released if is_recording => {
-                                    let _ = toggle_recording_inner(app, &state);
-                                }
-                                _ => {}
-                            },
-                        }
+                    if shortcuts
+                        .hold
+                        .as_ref()
+                        .is_some_and(|registered| registered == shortcut)
+                    {
+                        handle_shortcut_event(app, &state, RecordingModeKind::Hold, event.state);
+                    } else if shortcuts
+                        .toggle
+                        .as_ref()
+                        .is_some_and(|registered| registered == shortcut)
+                    {
+                        handle_shortcut_event(app, &state, RecordingModeKind::Toggle, event.state);
                     }
                 })
                 .build(),
@@ -2057,32 +2745,52 @@ fn main() {
                     last_message: "Ready".to_string(),
                 }),
                 recorder: Mutex::new(None),
-                current_shortcut: Mutex::new(None),
+                current_shortcuts: Mutex::new(RegisteredShortcuts::default()),
                 http_client,
                 transcript_history: Mutex::new(transcript_history),
                 durable_draft: Mutex::new(durable_draft),
+                debug_log: Mutex::new(Vec::new()),
             };
             app.manage(state);
 
             let app_state: State<AppState> = app.state();
-            let registration = register_shortcut_with_fallback(app.handle(), &app_state, &settings.hotkey)
-                .map_err(|e| Box::<dyn std::error::Error>::from(e.to_string()))?;
-            if let Some(requested_hotkey) = registration.fallback_from {
-                if let Ok(mut state_settings) = app_state.settings.lock() {
-                    state_settings.hotkey = registration.active_hotkey.clone();
-                    if let Err(error) = persist_settings(app.handle(), &state_settings) {
-                        eprintln!("Failed to persist fallback hotkey: {error}");
-                    }
-                }
-                set_status(
-                    app.handle(),
+            match register_shortcuts_strict(
+                app.handle(),
+                &app_state,
+                &settings.hold_hotkey,
+                &settings.toggle_hotkey,
+            ) {
+                Ok(registration) => debug_log_state(
                     &app_state,
-                    None,
-                    None,
-                    None,
                     format!(
-                        "Requested hotkey '{}' was unavailable at startup. Applied fallback '{}' and saved it.",
-                        requested_hotkey, registration.active_hotkey
+                        "startup_shortcuts hold={} toggle={}",
+                        registration.hold.requested_hotkey, registration.toggle.requested_hotkey
+                    ),
+                ),
+                Err(error) => {
+                    set_status(
+                        app.handle(),
+                        &app_state,
+                        None,
+                        None,
+                        None,
+                        "Saved shortcuts aren't available. Open Settings > Shortcuts.".to_string(),
+                    );
+                    debug_log_state(
+                        &app_state,
+                        format!(
+                            "startup_shortcuts_failed hold={} toggle={} error={}",
+                            settings.hold_hotkey, settings.toggle_hotkey, error
+                        ),
+                    );
+                }
+            }
+            if let Ok(state_settings) = app_state.settings.lock() {
+                debug_log_state(
+                    &app_state,
+                    format!(
+                        "loaded_settings hold={} toggle={}",
+                        state_settings.hold_hotkey, state_settings.toggle_hotkey
                     ),
                 );
             }
@@ -2123,6 +2831,7 @@ fn main() {
             get_settings,
             save_settings,
             get_runtime_status,
+            get_debug_log,
             get_transcript_history,
             clear_transcript_history,
             get_durable_draft,

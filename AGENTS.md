@@ -97,6 +97,36 @@ Rules:
 - collapse/expand should animate smoothly, not snap
 - avoid decorative icons or oversized icon containers
 - the collapsed state should hide copy without causing obvious layout jitter
+- the sidebar bottom controls should stay pinned to the bottom in both expanded and collapsed states
+- the sidebar collapse control should be compact and icon-led; avoid extra explanatory text there
+- do not duplicate shortcuts, language, or runtime state inside a sidebar setup card; the workspace header is the right place for that information
+- keep sidebar tab states flat and 2D; use calm borders and fills, not glass, sheen, or inset highlight effects
+
+### Shell layout
+
+The desktop app should use a framed shell layout:
+- a soft outer app frame with a slightly darker neutral tone
+- an inner main canvas that is lighter and clearly inset
+- the sidebar should live in the outer shell area, not as a separate floating card
+- the main canvas should carry generous padding and more whitespace than the shell
+- typography inside the canvas should be smaller and calmer than a typical web app
+- on macOS, prefer an overlay/embedded titlebar treatment so native window controls feel integrated into the shell instead of sitting above it
+- the shell should fill the full native window with no extra inset wrapper around the app itself
+- the root document should not scroll; only the intended inner workspace areas may scroll
+- if the main workspace scrolls, hide the shell scrollbar chrome; do not leave a visible outer-window scrollbar on the right edge
+- the macOS drag region should be generous enough to grab easily, not a thin strip that requires pixel hunting
+- runtime status should read like a compact product control with a clear indicator, not a raw log line
+- mic/input meters should be useful for speech: favor log-scaled, speech-readable motion over literal linear percentages
+- shell branding should come from one shared app-name config, not ad hoc titles like "Voice Workspace" or "Desktop dictation"
+- prefer the real app icon in the shell brand mark over placeholder symbols when the icon asset is available
+- if the icon feels default, noisy, or low-quality, prefer a text-only shell brand until a deliberate app icon is ready
+- the sidebar carries persistent app branding; the main content header should show the active area title instead of repeating the app name
+- history should read like a simple transcript timeline, not an analytics/export dashboard
+- prefer grouped day sections with time + transcript rows over split panes, export controls, or detail inspectors
+- if history search exists, keep it to one plain search field; avoid extra dropdown filters or export tooling
+- on Home, prefer a compact stats strip plus a recent transcript list over shortcut summary tiles or a single large "latest transcript" preview card
+- if transcript rows need actions, keep it to a direct copy action inside the row; avoid separate detail panes just for copy/open behavior
+- for History specifically, row click may copy directly; confirm it with a subtle row-level state and a small bottom-right toast instead of adding another banner or modal
 
 ### Settings sections
 
@@ -293,6 +323,27 @@ Specific requirements:
 - the runtime strip should stay compact
 - accessibility should show just the key state plus actions
 - API diagnostics should stay compact and only show result when relevant
+
+## Shortcut System Rules
+
+Shortcuts are part of the primary product interaction, so treat them like a first-class control, not a technical settings form.
+
+Rules:
+- show shortcuts as separate keycaps, not raw strings
+- the shortcut itself should be the clickable editing surface
+- keep the shortcut list to the real actions only:
+  hold to speak
+  hands-free
+- global shortcuts should use two modifiers or a function key
+- never allow common editing shortcuts like Cmd+C, Cmd+V, Cmd+X, or similar single-modifier chords
+- remove preset rows, suggestion lists, fallback maps, and other "advanced" shortcut UI
+- ignore modifier-only presses while capturing
+- use physical key capture semantics so shifted punctuation saves as the underlying key combo, not the typed character
+- never silently rewrite or replace a user shortcut during save
+- if registration fails, keep the previously working shortcuts active and show a short actionable error
+- do not persist fallback substitutions over the user's chosen shortcut
+- keep shortcut copy minimal; avoid explanatory paragraphs when label + keycaps are enough
+- avoid vague status copy like "needs attention"; say what is wrong and where to fix it
 
 ## What To Avoid
 
