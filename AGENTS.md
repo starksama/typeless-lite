@@ -126,6 +126,7 @@ The desktop app should use a framed shell layout:
 - prefer grouped day sections with time + transcript rows over split panes, export controls, or detail inspectors
 - if history search exists, keep it to one plain search field; avoid extra dropdown filters or export tooling
 - on Home, prefer a compact stats strip plus a recent transcript list over shortcut summary tiles or a single large "latest transcript" preview card
+- home stats should use the standard app radius, not oversized pill shapes
 - if transcript rows need actions, keep it to a direct copy action inside the row; avoid separate detail panes just for copy/open behavior
 - for History specifically, row click may copy directly; confirm it with a subtle row-level state and a small bottom-right toast instead of adding another banner or modal
 

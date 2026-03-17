@@ -4,6 +4,8 @@ Open-source desktop dictation for macOS.
 
 Built for one job: press a global shortcut, speak, and get clean text inserted back into the app you were already using.
 
+![Typeless Lite screenshot](docs/github/screenshot.png)
+
 ## What it does
 
 - two real shortcuts:

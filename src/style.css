@@ -624,7 +624,7 @@ pre {
   min-width: 152px;
   padding: 11px 14px;
   border: 1px solid var(--stroke);
-  border-radius: 999px;
+  border-radius: 10px;
   background: rgba(249, 247, 243, 0.76);
 }
 
@@ -1639,7 +1639,7 @@ textarea.ui-input:focus,
   }
 
   .home-stat {
-    border-radius: 12px;
+    border-radius: 10px;
   }
 }
 
