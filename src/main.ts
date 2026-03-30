@@ -286,12 +286,12 @@ const hotkeyTriggerBtns: Record<ShortcutSlot, HTMLButtonElement> = {
 };
 
 function defaultHotkeyForSlot(slot: ShortcutSlot): string {
-  return slot === 'toggle' ? 'Cmd+Option+Space' : 'Cmd+Shift+Space';
+  return slot === 'toggle' ? 'Option+Space' : 'Cmd+Space';
 }
 
 let activeConfig: Pick<Settings, 'hold_hotkey' | 'toggle_hotkey' | 'recording_mode' | 'language'> = {
-  hold_hotkey: 'Cmd+Shift+Space',
-  toggle_hotkey: 'Cmd+Option+Space',
+  hold_hotkey: 'Cmd+Space',
+  toggle_hotkey: 'Option+Space',
   recording_mode: 'hold',
   language: 'auto'
 };
@@ -921,10 +921,6 @@ function validateHotkey(hotkey: string): string | null {
   const modifiers = parts.filter((part) => KNOWN_MODIFIERS.has(part));
   const nonModifiers = parts.filter((part) => !KNOWN_MODIFIERS.has(part));
 
-  if (modifiers.length === 0) {
-    return 'Use at least one modifier (Cmd/Ctrl/Alt/Shift) plus one key.';
-  }
-
   const duplicateModifier = modifiers.find((modifier, index) => modifiers.indexOf(modifier) !== index);
   if (duplicateModifier) {
     return `Duplicate modifier "${duplicateModifier}". Use each modifier once.`;
@@ -944,8 +940,12 @@ function validateHotkey(hotkey: string): string | null {
 
   const primaryKey = nonModifiers[0];
   const isFunctionKey = /^F([1-9]|1[0-9]|2[0-4])$/.test(primaryKey);
-  if (modifiers.length < 2 && !isFunctionKey) {
-    return 'Use two modifiers or an F key.';
+  if (isFunctionKey && modifiers.length === 0) {
+    return null;
+  }
+
+  if (modifiers.length !== 1) {
+    return 'Use exactly one modifier plus one key, or use a single F key.';
   }
 
   return null;

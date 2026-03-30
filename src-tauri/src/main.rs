@@ -106,22 +106,22 @@ fn default_custom_vocabulary() -> String {
 
 #[cfg(target_os = "macos")]
 fn default_hold_hotkey() -> String {
-    "Cmd+Shift+Space".to_string()
+    "Cmd+Space".to_string()
 }
 
 #[cfg(not(target_os = "macos"))]
 fn default_hold_hotkey() -> String {
-    "Ctrl+Shift+Space".to_string()
+    "Ctrl+Space".to_string()
 }
 
 #[cfg(target_os = "macos")]
 fn default_toggle_hotkey() -> String {
-    "Cmd+Option+Space".to_string()
+    "Option+Space".to_string()
 }
 
 #[cfg(not(target_os = "macos"))]
 fn default_toggle_hotkey() -> String {
-    "Ctrl+Alt+Space".to_string()
+    "Alt+Space".to_string()
 }
 
 fn default_recording_mode() -> String {
@@ -427,13 +427,13 @@ fn save_settings(app: AppHandle, state: State<AppState>, settings: Settings) -> 
     let normalized_hold_hotkey = settings.hold_hotkey.trim().to_string();
     let normalized_toggle_hotkey = settings.toggle_hotkey.trim().to_string();
     if normalized_hold_hotkey.is_empty() {
-        return Err("Hold to speak shortcut cannot be empty.".to_string());
+        return Err(ShortcutBindingError::EmptyShortcut(RecordingModeKind::Hold.shortcut_label()).to_string());
     }
     if normalized_toggle_hotkey.is_empty() {
-        return Err("Hands-free shortcut cannot be empty.".to_string());
+        return Err(ShortcutBindingError::EmptyShortcut(RecordingModeKind::Toggle.shortcut_label()).to_string());
     }
     if normalized_hold_hotkey.eq_ignore_ascii_case(&normalized_toggle_hotkey) {
-        return Err("Hold to speak and hands-free shortcuts must be different.".to_string());
+        return Err(ShortcutBindingError::DuplicateBindings.to_string());
     }
     let normalized_mode = normalize_recording_mode(&settings.recording_mode);
     let normalized_language = normalize_transcription_language(&settings.language);
@@ -448,7 +448,8 @@ fn save_settings(app: AppHandle, state: State<AppState>, settings: Settings) -> 
         &state,
         &normalized_settings.hold_hotkey,
         &normalized_settings.toggle_hotkey,
-    )?;
+    )
+    .map_err(|error| error.to_string())?;
 
     {
         let mut lock = state
@@ -959,6 +960,22 @@ struct ShortcutBindingRegistration {
     shortcut: Shortcut,
 }
 
+#[derive(thiserror::Error, Debug)]
+enum ShortcutBindingError {
+    #[error("{0} cannot be empty.")]
+    EmptyShortcut(&'static str),
+    #[error("Hold to speak and hands-free shortcuts must be different.")]
+    DuplicateBindings,
+    #[error("{label} is invalid. Use one modifier plus one supported key, or use a single F key.")]
+    InvalidFormat { label: &'static str },
+    #[error("{label} must use one modifier plus one key, or use a single F key.")]
+    PolicyViolation { label: &'static str },
+    #[error("{label} isn't available right now. Choose another shortcut.")]
+    Unavailable { label: &'static str },
+    #[error("Failed to lock shortcut state.")]
+    ShortcutStateLock,
+}
+
 struct ShortcutRegistrationResult {
     hold: ShortcutBindingRegistration,
     toggle: ShortcutBindingRegistration,
@@ -977,7 +994,7 @@ fn parse_shortcut_binding(
     state: &State<AppState>,
     requested_hotkey: &str,
     mode: RecordingModeKind,
-) -> Result<ShortcutBindingRegistration, String> {
+) -> Result<ShortcutBindingRegistration, ShortcutBindingError> {
     let trimmed = requested_hotkey.trim();
     match trimmed.parse::<Shortcut>() {
         Ok(shortcut) => {
@@ -997,10 +1014,9 @@ fn parse_shortcut_binding(
                     error
                 ),
             );
-            Err(format!(
-                "{} is invalid. Use one modifier and one supported key.",
-                mode.shortcut_label()
-            ))
+            Err(ShortcutBindingError::InvalidFormat {
+                label: mode.shortcut_label(),
+            })
         }
     }
 }
@@ -1047,15 +1063,52 @@ fn is_function_key(code: Code) -> bool {
     )
 }
 
-fn validate_shortcut_policy(shortcut: &Shortcut, mode: RecordingModeKind) -> Result<(), String> {
-    if shortcut_modifier_count(shortcut) >= 2 || is_function_key(shortcut.key) {
+fn validate_shortcut_policy(
+    shortcut: &Shortcut,
+    mode: RecordingModeKind,
+) -> Result<(), ShortcutBindingError> {
+    let modifier_count = shortcut_modifier_count(shortcut);
+    if is_function_key(shortcut.key) && modifier_count == 0 {
         return Ok(());
     }
 
-    Err(format!(
-        "{} must use two modifiers or an F key.",
-        mode.shortcut_label()
-    ))
+    if modifier_count == 1 {
+        return Ok(());
+    }
+
+    Err(ShortcutBindingError::PolicyViolation {
+        label: mode.shortcut_label(),
+    })
+}
+
+#[cfg(test)]
+mod shortcut_policy_tests {
+    use super::{validate_shortcut_policy, RecordingModeKind};
+    use tauri_plugin_global_shortcut::Shortcut;
+
+    #[test]
+    fn accepts_single_modifier_plus_key() {
+        let shortcut = "Ctrl+Space".parse::<Shortcut>().expect("shortcut should parse");
+        assert!(validate_shortcut_policy(&shortcut, RecordingModeKind::Hold).is_ok());
+    }
+
+    #[test]
+    fn accepts_single_function_key() {
+        let shortcut = "F8".parse::<Shortcut>().expect("shortcut should parse");
+        assert!(validate_shortcut_policy(&shortcut, RecordingModeKind::Hold).is_ok());
+    }
+
+    #[test]
+    fn rejects_plain_non_modifier_key() {
+        let shortcut = "Space".parse::<Shortcut>().expect("shortcut should parse");
+        assert!(validate_shortcut_policy(&shortcut, RecordingModeKind::Hold).is_err());
+    }
+
+    #[test]
+    fn rejects_multiple_modifiers_plus_key() {
+        let shortcut = "Ctrl+Alt+Space".parse::<Shortcut>().expect("shortcut should parse");
+        assert!(validate_shortcut_policy(&shortcut, RecordingModeKind::Hold).is_err());
+    }
 }
 
 fn register_shortcut_binding(
@@ -1063,7 +1116,7 @@ fn register_shortcut_binding(
     state: &State<AppState>,
     binding: ShortcutBindingRegistration,
     mode: RecordingModeKind,
-) -> Result<ShortcutBindingRegistration, String> {
+) -> Result<ShortcutBindingRegistration, ShortcutBindingError> {
     match app.global_shortcut().register(binding.shortcut) {
         Ok(()) => Ok(binding),
         Err(error) => {
@@ -1076,10 +1129,9 @@ fn register_shortcut_binding(
                     error
                 ),
             );
-            Err(format!(
-                "{} isn't available right now. Choose another shortcut.",
-                mode.shortcut_label()
-            ))
+            Err(ShortcutBindingError::Unavailable {
+                label: mode.shortcut_label(),
+            })
         }
     }
 }
@@ -1122,17 +1174,17 @@ fn register_shortcuts_strict(
     state: &State<AppState>,
     hold_hotkey: &str,
     toggle_hotkey: &str,
-) -> Result<ShortcutRegistrationResult, String> {
+) -> Result<ShortcutRegistrationResult, ShortcutBindingError> {
     let hold = parse_shortcut_binding(state, hold_hotkey, RecordingModeKind::Hold)?;
     let toggle = parse_shortcut_binding(state, toggle_hotkey, RecordingModeKind::Toggle)?;
     if hold.shortcut == toggle.shortcut {
-        return Err("Hold to speak and hands-free shortcuts must be different.".to_string());
+        return Err(ShortcutBindingError::DuplicateBindings);
     }
 
     let mut lock = state
         .current_shortcuts
         .lock()
-        .map_err(|_| "Failed to lock shortcut state".to_string())?;
+        .map_err(|_| ShortcutBindingError::ShortcutStateLock)?;
     let previous = *lock;
     unregister_registered_shortcuts(app, &mut lock);
 
