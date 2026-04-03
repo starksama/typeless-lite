@@ -927,7 +927,7 @@ function validateHotkey(hotkey: string): string | null {
   }
 
   if (nonModifiers.length === 0) {
-    return 'Add one key besides the modifiers.';
+    return 'Modifier-only shortcuts are not supported here yet. Use one key with one or two modifiers, or use a single F key.';
   }
 
   if (nonModifiers.length > 1) {
@@ -944,8 +944,12 @@ function validateHotkey(hotkey: string): string | null {
     return null;
   }
 
-  if (modifiers.length !== 1) {
-    return 'Use exactly one modifier plus one key, or use a single F key.';
+  if (modifiers.length === 0) {
+    return 'Add at least one modifier key, or use a single F key.';
+  }
+
+  if (modifiers.length > 2) {
+    return 'Use at most two modifiers plus one key.';
   }
 
   return null;

@@ -966,9 +966,9 @@ enum ShortcutBindingError {
     EmptyShortcut(&'static str),
     #[error("Hold to speak and hands-free shortcuts must be different.")]
     DuplicateBindings,
-    #[error("{label} is invalid. Use one modifier plus one supported key, or use a single F key.")]
+    #[error("{label} is invalid. Use one supported key with one or two modifiers. Modifier-only shortcuts are not supported here yet. Single F keys also work.")]
     InvalidFormat { label: &'static str },
-    #[error("{label} must use one modifier plus one key, or use a single F key.")]
+    #[error("{label} must use one supported key with one or two modifiers. Modifier-only shortcuts are not supported here yet. Single F keys also work.")]
     PolicyViolation { label: &'static str },
     #[error("{label} isn't available right now. Choose another shortcut.")]
     Unavailable { label: &'static str },
@@ -1072,7 +1072,7 @@ fn validate_shortcut_policy(
         return Ok(());
     }
 
-    if modifier_count == 1 {
+    if (1..=2).contains(&modifier_count) {
         return Ok(());
     }
 
@@ -1093,6 +1093,12 @@ mod shortcut_policy_tests {
     }
 
     #[test]
+    fn accepts_two_modifiers_plus_key() {
+        let shortcut = "Ctrl+Alt+Space".parse::<Shortcut>().expect("shortcut should parse");
+        assert!(validate_shortcut_policy(&shortcut, RecordingModeKind::Hold).is_ok());
+    }
+
+    #[test]
     fn accepts_single_function_key() {
         let shortcut = "F8".parse::<Shortcut>().expect("shortcut should parse");
         assert!(validate_shortcut_policy(&shortcut, RecordingModeKind::Hold).is_ok());
@@ -1105,9 +1111,16 @@ mod shortcut_policy_tests {
     }
 
     #[test]
-    fn rejects_multiple_modifiers_plus_key() {
-        let shortcut = "Ctrl+Alt+Space".parse::<Shortcut>().expect("shortcut should parse");
+    fn rejects_three_modifiers_plus_key() {
+        let shortcut = "Ctrl+Alt+Shift+Space"
+            .parse::<Shortcut>()
+            .expect("shortcut should parse");
         assert!(validate_shortcut_policy(&shortcut, RecordingModeKind::Hold).is_err());
+    }
+
+    #[test]
+    fn rejects_modifier_only_shortcuts_at_parse_time() {
+        assert!("Ctrl+Alt".parse::<Shortcut>().is_err());
     }
 }
 
