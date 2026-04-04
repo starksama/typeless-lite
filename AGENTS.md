@@ -385,3 +385,11 @@ Before shipping UI work, verify:
 - controls and panels remained compact
 - visible status text is short and relevant
 - the app still feels like a polished desktop utility
+
+## Agent Validation Rules
+
+Before finalizing a fix, explicitly validate these points:
+- surface-fix check: does this only patch the visible symptom while leaving the root cause in place, adding complexity, or creating new failure modes elsewhere?
+- affected-code review: list the other code paths touched by the change, then review them one by one for bad implications, regressions, or policy mismatches
+
+Prefer the fix that reduces system complexity and resolves the issue at the correct boundary, not the smallest local patch if that patch spreads special cases.

@@ -125,6 +125,7 @@ const NON_MODIFIER_ALIAS_TO_CANONICAL: Record<string, string> = {
   del: 'Delete',
   delete: 'Delete',
   down: 'Down',
+  arrowdown: 'Down',
   end: 'End',
   enter: 'Enter',
   equal: '=',
@@ -132,24 +133,31 @@ const NON_MODIFIER_ALIAS_TO_CANONICAL: Record<string, string> = {
   home: 'Home',
   insert: 'Insert',
   left: 'Left',
+  arrowleft: 'Left',
   minus: '-',
   pagedown: 'PageDown',
   pageup: 'PageUp',
   period: '.',
   quote: "'",
   right: 'Right',
+  arrowright: 'Right',
   semicolon: ';',
   slash: '/',
   space: 'Space',
   spacebar: 'Space',
+  fn: 'Fn',
+  function: 'Fn',
   esc: 'Escape',
   return: 'Enter',
   tab: 'Tab',
-  up: 'Up'
+  up: 'Up',
+  arrowup: 'Up'
 };
 
 const KNOWN_MODIFIERS = new Set(['Cmd', 'Ctrl', 'Alt', 'Shift', 'Super']);
 const MODIFIER_EVENT_KEYS = new Set(['Meta', 'Control', 'Alt', 'Shift', 'AltGraph']);
+const NATIVE_HOTKEY_CAPTURE_EVENT = 'native-hotkey-captured';
+const NATIVE_HOTKEY_FN_STATE_EVENT = 'native-hotkey-fn-state';
 const HOME_RECENT_LIMIT = 8;
 const ESTIMATED_TYPING_WPM = 40;
 const ESTIMATED_DICTATION_WPM = 130;
@@ -179,6 +187,7 @@ const settingsApiTestStatusEl = document.querySelector<HTMLElement>('#settings-a
 const settingsDiagnosticsCopyStatusEl = document.querySelector<HTMLElement>('#settings-diagnostics-copy-status')!;
 const copyDiagnosticsBtn = document.querySelector<HTMLButtonElement>('#copy-diagnostics-btn')!;
 const form = document.querySelector<HTMLFormElement>('#settings-form')!;
+const saveSettingsBtn = document.querySelector<HTMLButtonElement>('#save-settings-btn')!;
 const toggleBtn = document.querySelector<HTMLButtonElement>('#toggle-btn')!;
 const draftRestoreBannerEl = document.querySelector<HTMLDivElement>('#draft-restore-banner')!;
 const draftRestorePreviewEl = document.querySelector<HTMLParagraphElement>('#draft-restore-preview')!;
@@ -210,6 +219,7 @@ const holdHotkeyValidationEl = document.querySelector<HTMLParagraphElement>('#ho
 const toggleHotkeyValidationEl = document.querySelector<HTMLParagraphElement>('#toggle-hotkey-validation')!;
 const holdHotkeyTriggerBtn = document.querySelector<HTMLButtonElement>('#hold-hotkey-trigger-btn')!;
 const toggleHotkeyTriggerBtn = document.querySelector<HTMLButtonElement>('#toggle-hotkey-trigger-btn')!;
+const shortcutDirtyIndicatorEl = document.querySelector<HTMLSpanElement>('#shortcut-dirty-indicator')!;
 const homeToggleBtn = document.querySelector<HTMLButtonElement>('#home-toggle-btn')!;
 const homeFastModeBtn = document.querySelector<HTMLButtonElement>('#home-fast-mode-btn')!;
 const homeFastModeStateEl = document.querySelector<HTMLSpanElement>('#home-fast-mode-state')!;
@@ -295,10 +305,15 @@ let activeConfig: Pick<Settings, 'hold_hotkey' | 'toggle_hotkey' | 'recording_mo
   recording_mode: 'hold',
   language: 'auto'
 };
+let savedShortcutConfig: Pick<Settings, 'hold_hotkey' | 'toggle_hotkey'> = {
+  hold_hotkey: 'Cmd+Space',
+  toggle_hotkey: 'Option+Space'
+};
 let activeTab: WorkspaceTab = 'home';
 let activeSettingsSection: SettingsSection = 'general';
 let isSidebarCollapsed = false;
 let activeHotkeyCaptureTarget: HotkeyCaptureTarget | null = null;
+let nativeFnCapturePressed = false;
 const ONBOARDING_COMPLETED_KEY = 'typeless:onboarding-complete:v1';
 const SIDEBAR_COLLAPSED_KEY = 'typeless:sidebar-collapsed:v1';
 const SETTINGS_SECTION_KEY = 'typeless:settings-section:v1';
@@ -900,9 +915,10 @@ function normalizeHotkeyInput(input: string): string {
       return compactPart;
     });
 
+  const fnParts = normalizedParts.filter((part) => part === 'Fn');
   const modifierParts = normalizedParts.filter((part) => KNOWN_MODIFIERS.has(part));
-  const nonModifierParts = normalizedParts.filter((part) => !KNOWN_MODIFIERS.has(part));
-  return [...modifierParts, ...nonModifierParts].join('+');
+  const nonModifierParts = normalizedParts.filter((part) => part !== 'Fn' && !KNOWN_MODIFIERS.has(part));
+  return [...fnParts, ...modifierParts, ...nonModifierParts].join('+');
 }
 
 function validateHotkey(hotkey: string): string | null {
@@ -918,16 +934,27 @@ function validateHotkey(hotkey: string): string | null {
 
   const normalized = normalizeHotkeyInput(trimmed);
   const parts = normalized.split('+').filter(Boolean);
+  const fnCount = parts.filter((part) => part === 'Fn').length;
   const modifiers = parts.filter((part) => KNOWN_MODIFIERS.has(part));
-  const nonModifiers = parts.filter((part) => !KNOWN_MODIFIERS.has(part));
+  const nonModifiers = parts.filter((part) => part !== 'Fn' && !KNOWN_MODIFIERS.has(part));
 
   const duplicateModifier = modifiers.find((modifier, index) => modifiers.indexOf(modifier) !== index);
   if (duplicateModifier) {
     return `Duplicate modifier "${duplicateModifier}". Use each modifier once.`;
   }
 
+  if (fnCount > 1) {
+    return 'Duplicate modifier "Fn". Use each modifier once.';
+  }
+
+  if (fnCount === 1 && nonModifiers.length === 0 && modifiers.length === 0) {
+    return PLATFORM_IS_MAC ? null : 'Fn shortcuts are only supported on macOS.';
+  }
+
   if (nonModifiers.length === 0) {
-    return 'Modifier-only shortcuts are not supported here yet. Use one key with one or two modifiers, or use a single F key.';
+    return PLATFORM_IS_MAC
+      ? 'Modifier-only shortcuts are not supported here yet. Use one key with modifiers, a single F key, or Fn.'
+      : 'Modifier-only shortcuts are not supported here yet. Use one key with one or two modifiers, or use a single F key.';
   }
 
   if (nonModifiers.length > 1) {
@@ -935,20 +962,33 @@ function validateHotkey(hotkey: string): string | null {
   }
 
   if (!canonicalizeNonModifierToken(nonModifiers[0])) {
-    return `Unsupported key "${nonModifiers[0]}". Use a real key like A, 1, Space, or F8.`;
+    return PLATFORM_IS_MAC
+      ? `Unsupported key "${nonModifiers[0]}". Use a real key like A, 1, Space, F8, or Fn.`
+      : `Unsupported key "${nonModifiers[0]}". Use a real key like A, 1, Space, or F8.`;
   }
 
   const primaryKey = nonModifiers[0];
   const isFunctionKey = /^F([1-9]|1[0-9]|2[0-4])$/.test(primaryKey);
-  if (isFunctionKey && modifiers.length === 0) {
+  const totalModifierCount = modifiers.length + fnCount;
+  if (isFunctionKey && totalModifierCount === 0) {
     return null;
   }
 
-  if (modifiers.length === 0) {
-    return 'Add at least one modifier key, or use a single F key.';
+  if (totalModifierCount === 0) {
+    return PLATFORM_IS_MAC
+      ? 'Add at least one modifier key, or use a single F key or Fn.'
+      : 'Add at least one modifier key, or use a single F key.';
   }
 
-  if (modifiers.length > 2) {
+  if (fnCount === 1 && !PLATFORM_IS_MAC) {
+    return 'Fn shortcuts are only supported on macOS.';
+  }
+
+  if (fnCount === 1 && modifiers.length > 2) {
+    return 'Use Fn plus at most two other modifiers and one key.';
+  }
+
+  if (fnCount === 0 && modifiers.length > 2) {
     return 'Use at most two modifiers plus one key.';
   }
 
@@ -956,13 +996,17 @@ function validateHotkey(hotkey: string): string | null {
 }
 
 function hotkeyHasNonModifier(hotkey: string): boolean {
-  return normalizeHotkeyInput(hotkey)
-    .split('+')
-    .some((part) => part && !KNOWN_MODIFIERS.has(part));
+  const parts = normalizeHotkeyInput(hotkey).split('+').filter(Boolean);
+  const fnCount = parts.filter((part) => part === 'Fn').length;
+  const nonModifiers = parts.filter((part) => part !== 'Fn' && !KNOWN_MODIFIERS.has(part));
+  return nonModifiers.length > 0 || (PLATFORM_IS_MAC && fnCount === 1 && parts.length === 1);
 }
 
 function keyTokenFromCode(code: string): string | null {
   if (!code) return null;
+  if (code === 'Fn') {
+    return 'Fn';
+  }
   if (/^Key[A-Z]$/.test(code)) {
     return code.slice(3);
   }
@@ -1049,6 +1093,13 @@ function keyTokenFromCode(code: string): string | null {
 
 function hotkeyFromKeyboardEvent(event: KeyboardEvent): string {
   const parts: string[] = [];
+  const fnPressed =
+    PLATFORM_IS_MAC &&
+    (event.code === 'Fn' ||
+      event.key === 'Fn' ||
+      event.getModifierState?.('Fn') === true ||
+      nativeFnCapturePressed);
+  if (fnPressed) parts.push('Fn');
   if (event.metaKey) parts.push('Cmd');
   if (event.ctrlKey) parts.push('Ctrl');
   if (event.altKey) parts.push('Alt');
@@ -1077,6 +1128,8 @@ function hotkeyTokenDisplayLabel(token: string): string {
       return PLATFORM_IS_MAC ? 'Option' : 'Alt';
     case 'Escape':
       return 'Esc';
+    case 'Fn':
+      return 'fn';
     case 'PageDown':
       return 'PgDn';
     case 'PageUp':
@@ -1155,6 +1208,7 @@ function applyConfigUi(config: Pick<Settings, 'hold_hotkey' | 'toggle_hotkey' | 
     activeHotkeyCaptureTarget === 'onboarding'
   );
   modeStatusTextEl.textContent = `${modeLabel}. ${languageText}.`;
+  renderShortcutDirtyState();
 }
 
 function setRecordingActionLabels(
@@ -1312,6 +1366,33 @@ function currentSettingsConfig(): Pick<Settings, 'hold_hotkey' | 'toggle_hotkey'
   };
 }
 
+function currentShortcutValue(slot: ShortcutSlot): string {
+  return normalizeHotkeyInput(hotkeyInputs[slot].value) || defaultHotkeyForSlot(slot);
+}
+
+function savedShortcutValue(slot: ShortcutSlot): string {
+  return slot === 'hold' ? savedShortcutConfig.hold_hotkey : savedShortcutConfig.toggle_hotkey;
+}
+
+function updateSavedShortcutConfig(config: Pick<Settings, 'hold_hotkey' | 'toggle_hotkey'>): void {
+  savedShortcutConfig = {
+    hold_hotkey: normalizeHotkeyInput(config.hold_hotkey) || defaultHotkeyForSlot('hold'),
+    toggle_hotkey: normalizeHotkeyInput(config.toggle_hotkey) || defaultHotkeyForSlot('toggle')
+  };
+}
+
+function renderShortcutDirtyState(): void {
+  const holdDirty = currentShortcutValue('hold') !== savedShortcutValue('hold');
+  const toggleDirty = currentShortcutValue('toggle') !== savedShortcutValue('toggle');
+  const anyDirty = holdDirty || toggleDirty;
+
+  hotkeyTriggerBtns.hold.classList.toggle('is-dirty', holdDirty);
+  hotkeyTriggerBtns.toggle.classList.toggle('is-dirty', toggleDirty);
+  shortcutDirtyIndicatorEl.classList.toggle('hidden', !anyDirty);
+  saveSettingsBtn.classList.toggle('is-dirty', anyDirty);
+  saveSettingsBtn.textContent = anyDirty ? 'Save changes' : 'Save settings';
+}
+
 function setSettingsHotkeyValidation(slot: ShortcutSlot, message: string, isError = false): void {
   const el = hotkeyValidationEls[slot];
   el.textContent = message;
@@ -1334,6 +1415,7 @@ function validateSettingsHotkeyInput(slot: ShortcutSlot): string | null {
   const validationMessage = validateHotkey(input.value);
   if (validationMessage) {
     setSettingsHotkeyValidation(slot, validationMessage, true);
+    renderShortcutDirtyState();
     return validationMessage;
   }
 
@@ -1343,11 +1425,13 @@ function validateSettingsHotkeyInput(slot: ShortcutSlot): string | null {
   if (distinctError) {
     setSettingsHotkeyValidation('hold', distinctError, true);
     setSettingsHotkeyValidation('toggle', distinctError, true);
+    renderShortcutDirtyState();
     return distinctError;
   }
 
   setSettingsHotkeyValidation('hold', '', false);
   setSettingsHotkeyValidation('toggle', '', false);
+  renderShortcutDirtyState();
   return null;
 }
 
@@ -1370,8 +1454,54 @@ function settingsHotkeyCaptureSlot(target: HotkeyCaptureTarget): ShortcutSlot | 
   return null;
 }
 
+function setActiveHotkeyCaptureValidation(target: HotkeyCaptureTarget, message: string, isError = false): void {
+  const slot = settingsHotkeyCaptureSlot(target);
+  if (slot) {
+    setSettingsHotkeyValidation(slot, message, isError);
+  } else {
+    setOnboardingHotkeyValidation(message, isError);
+  }
+}
+
+function syncNativeHotkeyCapture(active: boolean, target: HotkeyCaptureTarget): void {
+  if (!PLATFORM_IS_MAC) return;
+  void invoke<void>('set_native_hotkey_capture', { active }).catch((error) => {
+    if (!active || activeHotkeyCaptureTarget !== target) return;
+    setActiveHotkeyCaptureValidation(target, String(error), false);
+  });
+}
+
+function commitCapturedHotkey(candidate: string): void {
+  if (!activeHotkeyCaptureTarget) return;
+
+  if (!hotkeyHasNonModifier(candidate)) {
+    return;
+  }
+  const validationMessage = validateHotkey(candidate);
+  if (validationMessage) {
+    setActiveHotkeyCaptureValidation(activeHotkeyCaptureTarget, validationMessage, true);
+    return;
+  }
+
+  const slot = settingsHotkeyCaptureSlot(activeHotkeyCaptureTarget);
+  if (slot) {
+    hotkeyInputs[slot].value = candidate;
+    validateSettingsHotkeyInput('hold');
+    validateSettingsHotkeyInput('toggle');
+    applyConfigUi({
+      ...currentSettingsConfig()
+    });
+  } else {
+    onboardingHotkeyInput.value = candidate;
+    validateOnboardingHotkeyInput();
+  }
+  stopHotkeyCapture('Hotkey captured.', false);
+}
+
 function stopHotkeyCapture(message?: string, isError = false): void {
   if (!activeHotkeyCaptureTarget) return;
+  nativeFnCapturePressed = false;
+  syncNativeHotkeyCapture(false, activeHotkeyCaptureTarget);
   const slot = settingsHotkeyCaptureSlot(activeHotkeyCaptureTarget);
   if (slot) {
     hotkeyTriggerBtns[slot].disabled = false;
@@ -1391,6 +1521,7 @@ function startHotkeyCapture(target: HotkeyCaptureTarget): void {
     stopHotkeyCapture();
   }
   activeHotkeyCaptureTarget = target;
+  nativeFnCapturePressed = false;
   const slot = settingsHotkeyCaptureSlot(target);
   if (slot) {
     hotkeyTriggerBtns[slot].disabled = false;
@@ -1399,6 +1530,7 @@ function startHotkeyCapture(target: HotkeyCaptureTarget): void {
     onboardingHotkeyCaptureBtn.disabled = false;
     setOnboardingHotkeyValidation('', false);
   }
+  syncNativeHotkeyCapture(true, target);
   applyConfigUi({
     ...currentSettingsConfig()
   });
@@ -1415,6 +1547,15 @@ function setupHotkeyCapture(): void {
     startHotkeyCapture('onboarding');
   });
 
+  void listen<string>(NATIVE_HOTKEY_CAPTURE_EVENT, (event) => {
+    if (!activeHotkeyCaptureTarget) return;
+    commitCapturedHotkey(event.payload);
+  });
+
+  void listen<boolean>(NATIVE_HOTKEY_FN_STATE_EVENT, (event) => {
+    nativeFnCapturePressed = Boolean(event.payload) && Boolean(activeHotkeyCaptureTarget);
+  });
+
   window.addEventListener(
     'keydown',
     (event) => {
@@ -1427,34 +1568,7 @@ function setupHotkeyCapture(): void {
         return;
       }
 
-      const candidate = hotkeyFromKeyboardEvent(event);
-      if (!hotkeyHasNonModifier(candidate)) {
-        return;
-      }
-      const validationMessage = validateHotkey(candidate);
-      if (validationMessage) {
-        const slot = settingsHotkeyCaptureSlot(activeHotkeyCaptureTarget);
-        if (slot) {
-          setSettingsHotkeyValidation(slot, validationMessage, true);
-        } else {
-          setOnboardingHotkeyValidation(validationMessage, true);
-        }
-        return;
-      }
-
-      const slot = settingsHotkeyCaptureSlot(activeHotkeyCaptureTarget);
-      if (slot) {
-        hotkeyInputs[slot].value = candidate;
-        validateSettingsHotkeyInput('hold');
-        validateSettingsHotkeyInput('toggle');
-        applyConfigUi({
-          ...currentSettingsConfig()
-        });
-      } else {
-        onboardingHotkeyInput.value = candidate;
-        validateOnboardingHotkeyInput();
-      }
-      stopHotkeyCapture('Hotkey captured.', false);
+      commitCapturedHotkey(hotkeyFromKeyboardEvent(event));
     },
     true
   );
@@ -1462,11 +1576,14 @@ function setupHotkeyCapture(): void {
 
 async function saveSettingsPayload(payload: Settings, successMessage = 'Saved settings.'): Promise<boolean> {
   try {
+    console.log('[settings] save attempt', payload);
+    statusEl.textContent = 'Saving settings...';
     await invoke('save_settings', { settings: payload });
     const [savedSettings, runtimeStatus] = await Promise.all([
       invoke<Settings>('get_settings'),
       invoke<RuntimeStatus>('get_runtime_status')
     ]);
+    console.log('[settings] save success', savedSettings);
     applyConfigUi({
       hold_hotkey: savedSettings.hold_hotkey,
       toggle_hotkey: savedSettings.toggle_hotkey,
@@ -1475,14 +1592,18 @@ async function saveSettingsPayload(payload: Settings, successMessage = 'Saved se
     });
     holdHotkeyInput.value = normalizeHotkeyInput(savedSettings.hold_hotkey) || holdHotkeyInput.value;
     toggleHotkeyInput.value = normalizeHotkeyInput(savedSettings.toggle_hotkey) || toggleHotkeyInput.value;
+    updateSavedShortcutConfig({
+      hold_hotkey: savedSettings.hold_hotkey,
+      toggle_hotkey: savedSettings.toggle_hotkey
+    });
     formatEnabledInput.checked = savedSettings.format_enabled;
     renderFastModeState(savedSettings.format_enabled);
     renderStatus(runtimeStatus);
-    if (successMessage !== 'Saved settings.') {
-      statusEl.textContent = successMessage;
-    }
+    statusEl.textContent = successMessage;
+    renderShortcutDirtyState();
     return true;
   } catch (error) {
+    console.error('[settings] save failed', error);
     const errorText = String(error);
     const normalizedError = errorText.toLowerCase();
     if (isShortcutRelatedMessage(errorText)) {
@@ -1917,6 +2038,10 @@ async function loadInitial(): Promise<void> {
   promptTemplateInput.value = settings.prompt_template || defaultPrompt;
   holdHotkeyInput.value = normalizeHotkeyInput(settings.hold_hotkey) || defaultHotkeyForSlot('hold');
   toggleHotkeyInput.value = normalizeHotkeyInput(settings.toggle_hotkey) || defaultHotkeyForSlot('toggle');
+  updateSavedShortcutConfig({
+    hold_hotkey: settings.hold_hotkey,
+    toggle_hotkey: settings.toggle_hotkey
+  });
   whisperModelInput.value = settings.whisper_model;
   customVocabularyInput.value = settings.custom_vocabulary || '';
   formatModelInput.value = settings.format_model;
@@ -1993,16 +2118,19 @@ languageInput.addEventListener('change', () => {
 
 form.addEventListener('submit', async (event) => {
   event.preventDefault();
+  console.log('[settings] submit');
   const holdHotkeyError = validateSettingsHotkeyInput('hold');
   const toggleHotkeyError = validateSettingsHotkeyInput('toggle');
   const hotkeyError = holdHotkeyError || toggleHotkeyError || validateDistinctHotkeys();
   if (hotkeyError) {
+    console.warn('[settings] validation failed', { holdHotkeyError, toggleHotkeyError, hotkeyError });
     focusShortcutSettings();
     statusEl.textContent = hotkeyError;
     return;
   }
 
   const payload = readSettingsFromForm();
+  console.log('[settings] submit payload', payload);
   await saveSettingsPayload(payload);
 });
 
