@@ -1,6 +1,6 @@
 # Product Iteration Notes - 2026-03-15
 
-## Research brief: Typeless-like user value signals
+## Research brief: Keylesss-like user value signals
 
 Top recurring value signals across competitor docs and user feedback:
 - Lowest possible latency from speech stop to pasted text.

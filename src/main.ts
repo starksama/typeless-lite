@@ -317,9 +317,9 @@ let activeSettingsSection: SettingsSection = 'general';
 let isSidebarCollapsed = false;
 let activeHotkeyCaptureTarget: HotkeyCaptureTarget | null = null;
 let nativeFnCapturePressed = false;
-const ONBOARDING_COMPLETED_KEY = 'typeless:onboarding-complete:v1';
-const SIDEBAR_COLLAPSED_KEY = 'typeless:sidebar-collapsed:v1';
-const SETTINGS_SECTION_KEY = 'typeless:settings-section:v1';
+const ONBOARDING_COMPLETED_KEY = 'keylesss:onboarding-complete:v1';
+const SIDEBAR_COLLAPSED_KEY = 'keylesss:sidebar-collapsed:v1';
+const SETTINGS_SECTION_KEY = 'keylesss:settings-section:v1';
 const SETTINGS_SECTION_ORDER: SettingsSection[] = ['general', 'shortcuts', 'ai', 'privacy'];
 const WORKSPACE_TITLES: Record<WorkspaceTab, string> = {
   home: 'Home',

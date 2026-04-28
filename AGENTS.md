@@ -1,12 +1,12 @@
-# Typeless Lite Agent Guide
+# Keylesss Agent Guide
 
-This file is the UI/UX source of truth for agents working on Typeless Lite.
+This file is the UI/UX source of truth for agents working on Keylesss.
 
 If a future task touches layout, styling, interaction design, copy, or information architecture, follow this document before introducing new UI.
 
 ## Product Posture
 
-Typeless Lite should feel like a calm desktop app, not a busy SaaS dashboard.
+Keylesss should feel like a calm desktop app, not a busy SaaS dashboard.
 
 The app exists to support one primary workflow:
 1. Start dictation quickly.

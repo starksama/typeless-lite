@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Typeless Lite",
+  "productName": "Keylesss",
   "version": "0.1.0",
-  "identifier": "com.typeless.lite",
+  "identifier": "com.keylesss.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build",
@@ -13,7 +13,7 @@
     "macOSPrivateApi": true,
     "windows": [
       {
-        "title": "Typeless Lite",
+        "title": "Keylesss",
         "width": 1360,
         "height": 900,
         "minWidth": 1120,

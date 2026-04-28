@@ -2,7 +2,7 @@
 
 These notes are intentionally separated from `README.md`.
 
-## Product Pattern (Typeless / Flow-style)
+## Product Pattern (Keylesss / Flow-style)
 
 Core workflow:
 1. Capture speech with a global shortcut.

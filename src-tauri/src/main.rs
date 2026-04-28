@@ -752,7 +752,7 @@ fn check_accessibility_permission() -> AccessibilityPermissionStatus {
                 is_supported: true,
                 is_granted: false,
                 status: "missing".to_string(),
-                guidance: "Accessibility permission is not granted. Open System Settings > Privacy & Security > Accessibility and enable Typeless Lite."
+                guidance: "Accessibility permission is not granted. Open System Settings > Privacy & Security > Accessibility and enable Keylesss."
                     .to_string(),
             }
         }
@@ -783,7 +783,7 @@ fn open_accessibility_settings() -> Result<String, String> {
         for url in urls {
             match Command::new("open").arg(url).status() {
                 Ok(status) if status.success() => {
-                    return Ok("Opened macOS Privacy settings. Go to Accessibility and enable Typeless Lite.".to_string());
+                    return Ok("Opened macOS Privacy settings. Go to Accessibility and enable Keylesss.".to_string());
                 }
                 _ => {}
             }
@@ -934,7 +934,7 @@ fn now_epoch_ms() -> u64 {
 
 fn debug_log_state(state: &State<'_, AppState>, message: impl Into<String>) {
     let line = format!("[{}] {}", now_epoch_ms(), message.into());
-    eprintln!("[typeless-lite] {line}");
+    eprintln!("[keylesss] {line}");
     if let Ok(mut entries) = state.debug_log.lock() {
         entries.push(line);
         if entries.len() > DEBUG_LOG_LIMIT {
@@ -1107,7 +1107,7 @@ fn update_tray_status(app: &AppHandle, status: &RuntimeStatus) {
     };
 
     let state_label = tray_state_label(status);
-    let tooltip = format!("Typeless Lite - {state_label}");
+    let tooltip = format!("Keylesss - {state_label}");
     let _ = tray.set_tooltip(Some(tooltip));
 
     #[cfg(target_os = "macos")]
@@ -1137,7 +1137,7 @@ fn ensure_overlay_window(app: &AppHandle) -> Result<(), String> {
         OVERLAY_WINDOW_LABEL,
         WebviewUrl::App("overlay.html".into()),
     )
-    .title("Typeless Lite Overlay")
+    .title("Keylesss Overlay")
     .inner_size(OVERLAY_WINDOW_WIDTH, OVERLAY_WINDOW_HEIGHT)
     .position(x, y)
     .resizable(false)
@@ -1156,7 +1156,7 @@ fn ensure_overlay_window(app: &AppHandle) -> Result<(), String> {
     let _ = window.set_always_on_top(true);
     let _ = window.set_visible_on_all_workspaces(true);
     eprintln!(
-        "[typeless-lite] overlay_window_ready x={x} y={y} width={OVERLAY_WINDOW_WIDTH} height={OVERLAY_WINDOW_HEIGHT}"
+        "[keylesss] overlay_window_ready x={x} y={y} width={OVERLAY_WINDOW_WIDTH} height={OVERLAY_WINDOW_HEIGHT}"
     );
 
     Ok(())
@@ -1222,7 +1222,7 @@ enum ShortcutBindingError {
     InvalidFormat { label: &'static str },
     #[error("{label} must use one supported key with one or two modifiers. Modifier-only shortcuts are not supported here yet. Single F keys also work, and macOS supports Fn by itself.")]
     PolicyViolation { label: &'static str },
-    #[error("{label} needs macOS Accessibility access. Open Settings > Access and enable Typeless Lite, then save again.")]
+    #[error("{label} needs macOS Accessibility access. Open Settings > Access and enable Keylesss, then save again.")]
     AccessibilityRequired { label: &'static str },
     #[cfg_attr(target_os = "macos", allow(dead_code))]
     #[error("{label} isn't available right now. Choose another shortcut.")]
@@ -2207,7 +2207,7 @@ fn start_recording(
         .duration_since(UNIX_EPOCH)
         .map_err(|e| AppError::Message(format!("Clock error: {e}")))?
         .as_millis();
-    let path = std::env::temp_dir().join(format!("typeless-lite-{epoch}.wav"));
+    let path = std::env::temp_dir().join(format!("keylesss-{epoch}.wav"));
 
     let spec = hound::WavSpec {
         channels: config.channels,
@@ -3622,7 +3622,7 @@ fn ensure_mac_shortcut_event_tap(state: &State<AppState>) -> Result<(), String> 
         );
         if tap.is_null() {
             return Err(
-                "Shortcut capture needs Accessibility access on macOS. Open Settings > Access and enable Typeless Lite, then try again."
+                "Shortcut capture needs Accessibility access on macOS. Open Settings > Access and enable Keylesss, then try again."
                     .to_string(),
             );
         }
@@ -4226,7 +4226,7 @@ fn paste_text(
             if accessibility_status.is_supported && !accessibility_status.is_granted {
                 restore_clipboard_after_delay(original_text, text.to_string());
                 return Err(AppError::Message(
-                    "Paste failed because Accessibility permission is missing. Open System Settings > Privacy & Security > Accessibility and enable Typeless Lite, then use the app's Open Accessibility Settings button to jump there."
+                    "Paste failed because Accessibility permission is missing. Open System Settings > Privacy & Security > Accessibility and enable Keylesss, then use the app's Open Accessibility Settings button to jump there."
                         .to_string(),
                 ));
             }
@@ -4408,7 +4408,7 @@ fn main() {
 
             let _tray = TrayIconBuilder::with_id(TRAY_ID)
                 .menu(&menu)
-                .tooltip("Typeless Lite")
+                .tooltip("Keylesss")
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "open" => {
