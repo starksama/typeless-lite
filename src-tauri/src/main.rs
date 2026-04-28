@@ -7,7 +7,7 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
     sync::atomic::{AtomicU64, Ordering},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, OnceLock},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -37,6 +37,7 @@ use tauri_plugin_global_shortcut::GlobalShortcutExt;
 use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut, ShortcutState};
 
 const APP_STATUS_EVENT: &str = "runtime-status";
+const APP_CONFIG_JSON: &str = include_str!("../../app.config.json");
 const OVERLAY_WINDOW_LABEL: &str = "overlay";
 const NATIVE_HOTKEY_CAPTURE_EVENT: &str = "native-hotkey-captured";
 const NATIVE_HOTKEY_FN_STATE_EVENT: &str = "native-hotkey-fn-state";
@@ -79,6 +80,7 @@ const NX_SECONDARYFNMASK: u64 = 0x00800000;
 #[cfg(target_os = "macos")]
 const MAC_FN_DISAMBIGUATION_DELAY_MS: u64 = 140;
 static HISTORY_ID_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+static APP_CONFIG: OnceLock<AppConfig> = OnceLock::new();
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct Settings {
@@ -293,6 +295,51 @@ struct AccessibilityPermissionStatus {
     is_granted: bool,
     status: String,
     guidance: String,
+}
+
+#[derive(Debug, Serialize)]
+struct MicrophonePermissionStatus {
+    platform: String,
+    is_supported: bool,
+    is_granted: bool,
+    status: String,
+    guidance: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct AppConfig {
+    #[serde(rename = "displayName")]
+    display_name: String,
+    #[serde(rename = "logPrefix")]
+    log_prefix: String,
+    #[serde(rename = "tempFilePrefix")]
+    temp_file_prefix: String,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            display_name: "Desktop Dictation".to_string(),
+            log_prefix: "app".to_string(),
+            temp_file_prefix: "app".to_string(),
+        }
+    }
+}
+
+fn app_config() -> &'static AppConfig {
+    APP_CONFIG.get_or_init(|| serde_json::from_str(APP_CONFIG_JSON).unwrap_or_default())
+}
+
+fn app_display_name() -> &'static str {
+    app_config().display_name.as_str()
+}
+
+fn app_log_prefix() -> &'static str {
+    app_config().log_prefix.as_str()
+}
+
+fn app_temp_file_prefix() -> &'static str {
+    app_config().temp_file_prefix.as_str()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -758,13 +805,15 @@ fn check_accessibility_permission() -> AccessibilityPermissionStatus {
                 guidance: "Accessibility permission is granted.".to_string(),
             }
         } else {
+            let app_name = app_display_name();
             AccessibilityPermissionStatus {
                 platform: "macOS".to_string(),
                 is_supported: true,
                 is_granted: false,
                 status: "missing".to_string(),
-                guidance: "Accessibility permission is not granted. Open System Settings > Privacy & Security > Accessibility and enable Keylesss."
-                    .to_string(),
+                guidance: format!(
+                    "Accessibility permission is not granted. Open System Settings > Privacy & Security > Accessibility and enable {app_name}."
+                ),
             }
         }
     }
@@ -786,6 +835,7 @@ fn check_accessibility_permission() -> AccessibilityPermissionStatus {
 fn open_accessibility_settings() -> Result<String, String> {
     #[cfg(target_os = "macos")]
     {
+        let app_name = app_display_name();
         let urls = [
             "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
             "x-apple.systempreferences:com.apple.preference.security?Privacy",
@@ -794,10 +844,9 @@ fn open_accessibility_settings() -> Result<String, String> {
         for url in urls {
             match Command::new("open").arg(url).status() {
                 Ok(status) if status.success() => {
-                    return Ok(
-                        "Opened macOS Privacy settings. Go to Accessibility and enable Keylesss."
-                            .to_string(),
-                    );
+                    return Ok(format!(
+                        "Opened macOS Privacy settings. Enable Accessibility for {app_name}."
+                    ));
                 }
                 _ => {}
             }
@@ -809,6 +858,180 @@ fn open_accessibility_settings() -> Result<String, String> {
     #[cfg(not(target_os = "macos"))]
     {
         Err("Opening Accessibility settings is only supported on macOS in this app.".to_string())
+    }
+}
+
+#[tauri::command]
+fn check_microphone_permission(state: State<AppState>) -> MicrophonePermissionStatus {
+    if state
+        .recorder
+        .lock()
+        .map(|recorder| recorder.is_some())
+        .unwrap_or(false)
+    {
+        return MicrophonePermissionStatus {
+            platform: std::env::consts::OS.to_string(),
+            is_supported: true,
+            is_granted: false,
+            status: "busy".to_string(),
+            guidance: "Microphone is already in use by the current recording.".to_string(),
+        };
+    }
+
+    probe_microphone_permission()
+}
+
+fn probe_microphone_permission() -> MicrophonePermissionStatus {
+    let app_name = app_display_name();
+    let host = cpal::default_host();
+    let Some(device) = host.default_input_device() else {
+        return MicrophonePermissionStatus {
+            platform: std::env::consts::OS.to_string(),
+            is_supported: true,
+            is_granted: false,
+            status: "unavailable".to_string(),
+            guidance: "No default microphone input device was found.".to_string(),
+        };
+    };
+
+    let Ok(supported_config) = device.default_input_config() else {
+        return MicrophonePermissionStatus {
+            platform: std::env::consts::OS.to_string(),
+            is_supported: true,
+            is_granted: false,
+            status: "unavailable".to_string(),
+            guidance: "No default microphone input configuration was found.".to_string(),
+        };
+    };
+
+    let sample_count = Arc::new(AtomicU64::new(0));
+    let err_fn = |err| {
+        eprintln!("Microphone permission probe stream error: {err}");
+    };
+    let stream_config: cpal::StreamConfig = supported_config.clone().into();
+    let stream_result = match supported_config.sample_format() {
+        cpal::SampleFormat::F32 => {
+            let sample_count = sample_count.clone();
+            device.build_input_stream(
+                &stream_config,
+                move |data: &[f32], _| {
+                    sample_count.fetch_add(data.len() as u64, Ordering::Relaxed);
+                },
+                err_fn,
+                None,
+            )
+        }
+        cpal::SampleFormat::I16 => {
+            let sample_count = sample_count.clone();
+            device.build_input_stream(
+                &stream_config,
+                move |data: &[i16], _| {
+                    sample_count.fetch_add(data.len() as u64, Ordering::Relaxed);
+                },
+                err_fn,
+                None,
+            )
+        }
+        cpal::SampleFormat::U16 => {
+            let sample_count = sample_count.clone();
+            device.build_input_stream(
+                &stream_config,
+                move |data: &[u16], _| {
+                    sample_count.fetch_add(data.len() as u64, Ordering::Relaxed);
+                },
+                err_fn,
+                None,
+            )
+        }
+        other => {
+            return MicrophonePermissionStatus {
+                platform: std::env::consts::OS.to_string(),
+                is_supported: true,
+                is_granted: false,
+                status: "unsupported".to_string(),
+                guidance: format!("Unsupported microphone sample format: {other:?}."),
+            };
+        }
+    };
+
+    let stream = match stream_result {
+        Ok(stream) => stream,
+        Err(error) => {
+            return MicrophonePermissionStatus {
+                platform: std::env::consts::OS.to_string(),
+                is_supported: true,
+                is_granted: false,
+                status: "missing".to_string(),
+                guidance: format!(
+                    "Microphone permission is not granted. Open System Settings > Privacy & Security > Microphone and enable {app_name}. ({error})"
+                ),
+            };
+        }
+    };
+
+    if let Err(error) = stream.play() {
+        return MicrophonePermissionStatus {
+            platform: std::env::consts::OS.to_string(),
+            is_supported: true,
+            is_granted: false,
+            status: "missing".to_string(),
+            guidance: format!(
+                "Microphone permission is not granted. Open System Settings > Privacy & Security > Microphone and enable {app_name}. ({error})"
+            ),
+        };
+    }
+
+    thread::sleep(Duration::from_millis(250));
+    drop(stream);
+
+    if sample_count.load(Ordering::Relaxed) > 0 {
+        MicrophonePermissionStatus {
+            platform: std::env::consts::OS.to_string(),
+            is_supported: true,
+            is_granted: true,
+            status: "granted".to_string(),
+            guidance: "Microphone permission is granted.".to_string(),
+        }
+    } else {
+        MicrophonePermissionStatus {
+            platform: std::env::consts::OS.to_string(),
+            is_supported: true,
+            is_granted: false,
+            status: "missing".to_string(),
+            guidance: format!(
+                "No microphone input was received. Open System Settings > Privacy & Security > Microphone and enable {app_name}."
+            ),
+        }
+    }
+}
+
+#[tauri::command]
+fn open_microphone_settings() -> Result<String, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let app_name = app_display_name();
+        let urls = [
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
+            "x-apple.systempreferences:com.apple.preference.security?Privacy",
+        ];
+
+        for url in urls {
+            match Command::new("open").arg(url).status() {
+                Ok(status) if status.success() => {
+                    return Ok(format!(
+                        "Opened macOS Privacy settings. Enable Microphone for {app_name}."
+                    ));
+                }
+                _ => {}
+            }
+        }
+
+        Err("Failed to open macOS Microphone settings automatically. Open System Settings > Privacy & Security > Microphone manually.".to_string())
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err("Opening Microphone settings is only supported on macOS in this app.".to_string())
     }
 }
 
@@ -948,7 +1171,7 @@ fn now_epoch_ms() -> u64 {
 
 fn debug_log_state(state: &State<'_, AppState>, message: impl Into<String>) {
     let line = format!("[{}] {}", now_epoch_ms(), message.into());
-    eprintln!("[keylesss] {line}");
+    eprintln!("[{}] {line}", app_log_prefix());
     if let Ok(mut entries) = state.debug_log.lock() {
         entries.push(line);
         if entries.len() > DEBUG_LOG_LIMIT {
@@ -1126,7 +1349,7 @@ fn update_tray_status(app: &AppHandle, status: &RuntimeStatus) {
     };
 
     let state_label = tray_state_label(status);
-    let tooltip = format!("Keylesss - {state_label}");
+    let tooltip = format!("{} - {state_label}", app_display_name());
     let _ = tray.set_tooltip(Some(tooltip));
 
     #[cfg(target_os = "macos")]
@@ -1156,7 +1379,7 @@ fn ensure_overlay_window(app: &AppHandle) -> Result<(), String> {
         OVERLAY_WINDOW_LABEL,
         WebviewUrl::App("overlay.html".into()),
     )
-    .title("Keylesss Overlay")
+    .title(format!("{} Overlay", app_display_name()))
     .inner_size(OVERLAY_WINDOW_WIDTH, OVERLAY_WINDOW_HEIGHT)
     .position(x, y)
     .resizable(false)
@@ -1175,7 +1398,8 @@ fn ensure_overlay_window(app: &AppHandle) -> Result<(), String> {
     let _ = window.set_always_on_top(true);
     let _ = window.set_visible_on_all_workspaces(true);
     eprintln!(
-        "[keylesss] overlay_window_ready x={x} y={y} width={OVERLAY_WINDOW_WIDTH} height={OVERLAY_WINDOW_HEIGHT}"
+        "[{}] overlay_window_ready x={x} y={y} width={OVERLAY_WINDOW_WIDTH} height={OVERLAY_WINDOW_HEIGHT}",
+        app_log_prefix()
     );
 
     Ok(())
@@ -1184,7 +1408,7 @@ fn ensure_overlay_window(app: &AppHandle) -> Result<(), String> {
 fn sync_overlay_window_visibility(app: &AppHandle, status: &RuntimeStatus) {
     if status.is_recording || status.is_processing {
         if let Err(error) = ensure_overlay_window(app) {
-            eprintln!("[keylesss] overlay_window_failed error={error}");
+            eprintln!("[{}] overlay_window_failed error={error}", app_log_prefix());
             return;
         }
         if let Some(window) = app.get_webview_window(OVERLAY_WINDOW_LABEL) {
@@ -1260,7 +1484,7 @@ enum ShortcutBindingError {
     InvalidFormat { label: &'static str },
     #[error("{label} must use one supported key with one or two modifiers. Modifier-only shortcuts are not supported here yet. Single F keys also work, and macOS supports Fn by itself.")]
     PolicyViolation { label: &'static str },
-    #[error("{label} needs macOS Accessibility access. Open Settings > Access and enable Keylesss, then save again.")]
+    #[error("{label} needs macOS Accessibility access. Open Settings > Access and enable this app, then save again.")]
     AccessibilityRequired { label: &'static str },
     #[cfg_attr(target_os = "macos", allow(dead_code))]
     #[error("{label} isn't available right now. Choose another shortcut.")]
@@ -1603,7 +1827,7 @@ mod transcription_prompt_tests {
 
 #[cfg(test)]
 mod audio_capture_tests {
-    use super::{analyze_wav_capture, validate_audio_capture};
+    use super::{analyze_wav_capture, app_temp_file_prefix, validate_audio_capture};
     use std::{
         fs,
         path::{Path, PathBuf},
@@ -1616,7 +1840,8 @@ mod audio_capture_tests {
             .expect("clock should be valid")
             .as_nanos();
         std::env::temp_dir().join(format!(
-            "keylesss-audio-capture-test-{label}-{}-{epoch}.wav",
+            "{}-audio-capture-test-{label}-{}-{epoch}.wav",
+            app_temp_file_prefix(),
             std::process::id()
         ))
     }
@@ -2315,7 +2540,7 @@ fn start_recording(
         .duration_since(UNIX_EPOCH)
         .map_err(|e| AppError::Message(format!("Clock error: {e}")))?
         .as_millis();
-    let path = std::env::temp_dir().join(format!("keylesss-{epoch}.wav"));
+    let path = std::env::temp_dir().join(format!("{}-{epoch}.wav", app_temp_file_prefix()));
 
     let spec = hound::WavSpec {
         channels: config.channels,
@@ -2566,7 +2791,10 @@ fn validate_audio_capture(wav_path: &Path) -> Result<AudioCaptureStats, AppError
     let stats = analyze_wav_capture(wav_path)?;
     if stats.sample_count == 0 || stats.duration_ms < MIN_CAPTURED_AUDIO_MS {
         return Err(AppError::Message(
-            "No microphone audio was captured. Check macOS Microphone permission for Keylesss, then try again.".to_string(),
+            format!(
+                "No microphone audio was captured. Check macOS Microphone permission for {}, then try again.",
+                app_display_name()
+            ),
         ));
     }
     if stats.rms < MIN_CAPTURE_RMS && stats.peak < MIN_CAPTURE_PEAK {
@@ -3791,8 +4019,10 @@ fn ensure_mac_shortcut_event_tap(state: &State<AppState>) -> Result<(), String> 
         );
         if tap.is_null() {
             return Err(
-                "Shortcut capture needs Accessibility access on macOS. Open Settings > Access and enable Keylesss, then try again."
-                    .to_string(),
+                format!(
+                    "Shortcut capture needs Accessibility access on macOS. Open Settings > Access and enable {}, then try again.",
+                    app_display_name()
+                ),
             );
         }
 
@@ -4395,8 +4625,10 @@ fn paste_text(
             if accessibility_status.is_supported && !accessibility_status.is_granted {
                 restore_clipboard_after_delay(original_text, text.to_string());
                 return Err(AppError::Message(
-                    "Paste failed because Accessibility permission is missing. Open System Settings > Privacy & Security > Accessibility and enable Keylesss, then use the app's Open Accessibility Settings button to jump there."
-                        .to_string(),
+                    format!(
+                        "Paste failed because Accessibility permission is missing. Open System Settings > Privacy & Security > Accessibility and enable {}, then use the app's Open Accessibility Settings button to jump there.",
+                        app_display_name()
+                    ),
                 ));
             }
         }
@@ -4576,7 +4808,7 @@ fn main() {
 
             let _tray = TrayIconBuilder::with_id(TRAY_ID)
                 .menu(&menu)
-                .tooltip("Keylesss")
+                .tooltip(app_display_name())
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "open" => {
@@ -4612,7 +4844,9 @@ fn main() {
             toggle_recording,
             test_api_connection,
             check_accessibility_permission,
-            open_accessibility_settings
+            open_accessibility_settings,
+            check_microphone_permission,
+            open_microphone_settings
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

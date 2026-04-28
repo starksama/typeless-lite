@@ -1,0 +1,11 @@
+{
+  "displayName": "Keylesss",
+  "legalName": "Keylesss",
+  "packageName": "keylesss",
+  "bundleIdentifier": "com.keylesss.desktop",
+  "macOSSigningIdentity": "-",
+  "storagePrefix": "keylesss",
+  "logPrefix": "keylesss",
+  "tempFilePrefix": "keylesss",
+  "microphoneUsageDescription": "{displayName} records microphone audio so it can transcribe your dictation."
+}

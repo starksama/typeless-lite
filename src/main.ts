@@ -37,6 +37,8 @@ type AccessibilityPermissionStatus = {
   guidance: string;
 };
 
+type MicrophonePermissionStatus = AccessibilityPermissionStatus;
+
 type ApiDiagnosticsStatus = {
   state: 'not_run' | 'testing' | 'passed' | 'failed';
   message: string;
@@ -183,8 +185,10 @@ const modeStatusTextEl = document.querySelector<HTMLParagraphElement>('#mode-sta
 const micLevelValueEl = document.querySelector<HTMLSpanElement>('#mic-level-value')!;
 const micLevelBarEl = document.querySelector<HTMLDivElement>('#mic-level-bar')!;
 const accessibilityStatusEl = document.querySelector<HTMLElement>('#accessibility-status')!;
+const microphoneStatusEl = document.querySelector<HTMLElement>('#microphone-status')!;
 const settingsRuntimeStatusEl = document.querySelector<HTMLElement>('#settings-runtime-status')!;
 const settingsAccessibilityStatusEl = document.querySelector<HTMLElement>('#settings-accessibility-status')!;
+const settingsMicrophoneStatusEl = document.querySelector<HTMLElement>('#settings-microphone-status')!;
 const settingsApiTestStatusEl = document.querySelector<HTMLElement>('#settings-api-test-status')!;
 const settingsDiagnosticsCopyStatusEl = document.querySelector<HTMLElement>('#settings-diagnostics-copy-status')!;
 const copyDiagnosticsBtn = document.querySelector<HTMLButtonElement>('#copy-diagnostics-btn')!;
@@ -198,6 +202,8 @@ const draftRestoreDismissBtn = document.querySelector<HTMLButtonElement>('#draft
 const testApiBtn = document.querySelector<HTMLButtonElement>('#test-api-btn')!;
 const checkAccessibilityBtn = document.querySelector<HTMLButtonElement>('#check-accessibility-btn')!;
 const openAccessibilitySettingsBtn = document.querySelector<HTMLButtonElement>('#open-accessibility-settings-btn')!;
+const checkMicrophoneBtn = document.querySelector<HTMLButtonElement>('#check-microphone-btn')!;
+const openMicrophoneSettingsBtn = document.querySelector<HTMLButtonElement>('#open-microphone-settings-btn')!;
 const accessibilityModalEl = document.querySelector<HTMLDivElement>('#accessibility-modal')!;
 const accessibilityModalOpenSettingsBtn = document.querySelector<HTMLButtonElement>(
   '#accessibility-modal-open-settings-btn'
@@ -274,9 +280,14 @@ const onboardingCheckAccessibilityBtn = document.querySelector<HTMLButtonElement
 const onboardingOpenAccessibilitySettingsBtn = document.querySelector<HTMLButtonElement>(
   '#onboarding-open-accessibility-settings-btn'
 )!;
+const onboardingCheckMicrophoneBtn = document.querySelector<HTMLButtonElement>('#onboarding-check-microphone-btn')!;
+const onboardingOpenMicrophoneSettingsBtn = document.querySelector<HTMLButtonElement>(
+  '#onboarding-open-microphone-settings-btn'
+)!;
 const onboardingAccessibilityStatusEl = document.querySelector<HTMLParagraphElement>(
   '#onboarding-accessibility-status'
 )!;
+const onboardingMicrophoneStatusEl = document.querySelector<HTMLParagraphElement>('#onboarding-microphone-status')!;
 const accessibilityModalDescriptionEl = document.querySelector<HTMLParagraphElement>('#accessibility-modal-description')!;
 
 const defaultPrompt =
@@ -317,9 +328,9 @@ let activeSettingsSection: SettingsSection = 'general';
 let isSidebarCollapsed = false;
 let activeHotkeyCaptureTarget: HotkeyCaptureTarget | null = null;
 let nativeFnCapturePressed = false;
-const ONBOARDING_COMPLETED_KEY = 'keylesss:onboarding-complete:v1';
-const SIDEBAR_COLLAPSED_KEY = 'keylesss:sidebar-collapsed:v1';
-const SETTINGS_SECTION_KEY = 'keylesss:settings-section:v1';
+const ONBOARDING_COMPLETED_KEY = `${APP_BRAND.storagePrefix}:onboarding-complete:v1`;
+const SIDEBAR_COLLAPSED_KEY = `${APP_BRAND.storagePrefix}:sidebar-collapsed:v1`;
+const SETTINGS_SECTION_KEY = `${APP_BRAND.storagePrefix}:settings-section:v1`;
 const SETTINGS_SECTION_ORDER: SettingsSection[] = ['general', 'shortcuts', 'ai', 'privacy'];
 const WORKSPACE_TITLES: Record<WorkspaceTab, string> = {
   home: 'Home',
@@ -339,6 +350,7 @@ const HISTORY_COPY_FEEDBACK_TIMEOUT_MS = 1600;
 const APP_TOAST_TIMEOUT_MS = 1600;
 let lastRuntimeStatus: RuntimeStatus | null = null;
 let lastAccessibilityStatus: AccessibilityPermissionStatus | null = null;
+let lastMicrophoneStatus: MicrophonePermissionStatus | null = null;
 let lastApiDiagnosticsStatus: ApiDiagnosticsStatus = {
   state: 'not_run',
   message: 'Not run yet.',
@@ -355,6 +367,14 @@ function setAccessibilityStatusSummary(message: string, clearStructured = false)
   settingsAccessibilityStatusEl.textContent = message;
   if (clearStructured) {
     lastAccessibilityStatus = null;
+  }
+}
+
+function setMicrophoneStatusSummary(message: string, clearStructured = false): void {
+  microphoneStatusEl.textContent = message;
+  settingsMicrophoneStatusEl.textContent = message;
+  if (clearStructured) {
+    lastMicrophoneStatus = null;
   }
 }
 
@@ -479,6 +499,8 @@ function buildDiagnosticsReport(debugLogLines: string[]): string {
   const runtimeMicLevel = runtime ? Math.max(0, Math.min(100, Math.round(runtime.mic_level || 0))) : 0;
   const accessibility = lastAccessibilityStatus;
   const accessibilitySummary = settingsAccessibilityStatusEl.textContent?.trim() || 'Unavailable';
+  const microphone = lastMicrophoneStatus;
+  const microphoneSummary = settingsMicrophoneStatusEl.textContent?.trim() || 'Unavailable';
   const apiState = lastApiDiagnosticsStatus.state.replace('_', ' ');
   const apiMessage = lastApiDiagnosticsStatus.message.trim() || 'Unavailable';
   const config = currentSettingsConfig();
@@ -507,6 +529,14 @@ function buildDiagnosticsReport(debugLogLines: string[]): string {
     `is_granted: ${accessibility ? String(accessibility.is_granted) : 'unknown'}`,
     `status: ${accessibility ? accessibility.status : 'unknown'}`,
     `guidance: ${accessibility ? accessibility.guidance : 'unknown'}`,
+    '',
+    '[microphone]',
+    `summary: ${microphoneSummary}`,
+    `platform: ${microphone ? microphone.platform : 'unknown'}`,
+    `is_supported: ${microphone ? String(microphone.is_supported) : 'unknown'}`,
+    `is_granted: ${microphone ? String(microphone.is_granted) : 'unknown'}`,
+    `status: ${microphone ? microphone.status : 'unknown'}`,
+    `guidance: ${microphone ? microphone.guidance : 'unknown'}`,
     '',
     '[api_test]',
     `state: ${apiState}`,
@@ -681,6 +711,7 @@ function showOnboarding(resetStep = true): void {
   if (resetStep) onboardingStepIndex = 0;
   syncOnboardingInputsFromSettings();
   onboardingAccessibilityStatusEl.textContent = 'Not checked yet.';
+  onboardingMicrophoneStatusEl.textContent = 'Not checked yet.';
   updateOnboardingStep();
   onboardingModalEl.classList.remove('hidden');
 }
@@ -1363,6 +1394,18 @@ function renderAccessibilityStatus(status: AccessibilityPermissionStatus): void 
   }
 }
 
+function renderMicrophoneStatus(status: MicrophonePermissionStatus): void {
+  lastMicrophoneStatus = status;
+  const label = status.is_supported
+    ? status.is_granted
+      ? 'Enabled'
+      : status.status === 'unavailable'
+        ? 'Unavailable'
+        : 'Needs access'
+    : 'Unsupported';
+  setMicrophoneStatusSummary(label);
+}
+
 function hideAccessibilityModal(): void {
   accessibilityModalEl.classList.add('hidden');
 }
@@ -1370,6 +1413,12 @@ function hideAccessibilityModal(): void {
 async function checkAndRenderAccessibilityStatus(): Promise<AccessibilityPermissionStatus> {
   const permissionStatus = await invoke<AccessibilityPermissionStatus>('check_accessibility_permission');
   renderAccessibilityStatus(permissionStatus);
+  return permissionStatus;
+}
+
+async function checkAndRenderMicrophoneStatus(): Promise<MicrophonePermissionStatus> {
+  const permissionStatus = await invoke<MicrophonePermissionStatus>('check_microphone_permission');
+  renderMicrophoneStatus(permissionStatus);
   return permissionStatus;
 }
 
@@ -1381,6 +1430,19 @@ async function openAccessibilitySettingsFromUi(button: HTMLButtonElement): Promi
     setAccessibilityStatusSummary('Settings opened', true);
   } catch (error) {
     setAccessibilityStatusSummary('Open failed', true);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function openMicrophoneSettingsFromUi(button: HTMLButtonElement): Promise<void> {
+  button.disabled = true;
+  try {
+    const message = await invoke<string>('open_microphone_settings');
+    statusEl.textContent = message;
+    setMicrophoneStatusSummary('Settings opened', true);
+  } catch (error) {
+    setMicrophoneStatusSummary('Open failed', true);
   } finally {
     button.disabled = false;
   }
@@ -2176,6 +2238,13 @@ async function loadInitial(): Promise<void> {
     setAccessibilityStatusSummary('Check failed', true);
   }
 
+  setMicrophoneStatusSummary('Checking...', true);
+  try {
+    await checkAndRenderMicrophoneStatus();
+  } catch (error) {
+    setMicrophoneStatusSummary('Check failed', true);
+  }
+
   if (!isOnboardingCompleted()) {
     setActiveTab('settings');
     showOnboarding();
@@ -2314,6 +2383,22 @@ openAccessibilitySettingsBtn.addEventListener('click', async () => {
   await openAccessibilitySettingsFromUi(openAccessibilitySettingsBtn);
 });
 
+checkMicrophoneBtn.addEventListener('click', async () => {
+  checkMicrophoneBtn.disabled = true;
+  setMicrophoneStatusSummary('Checking...', true);
+  try {
+    await checkAndRenderMicrophoneStatus();
+  } catch (error) {
+    setMicrophoneStatusSummary('Check failed', true);
+  } finally {
+    checkMicrophoneBtn.disabled = false;
+  }
+});
+
+openMicrophoneSettingsBtn.addEventListener('click', async () => {
+  await openMicrophoneSettingsFromUi(openMicrophoneSettingsBtn);
+});
+
 accessibilityModalOpenSettingsBtn.addEventListener('click', async () => {
   hideAccessibilityModal();
   await openAccessibilitySettingsFromUi(accessibilityModalOpenSettingsBtn);
@@ -2400,6 +2485,40 @@ onboardingOpenAccessibilitySettingsBtn.addEventListener('click', async () => {
     onboardingAccessibilityStatusEl.textContent = `Failed to open settings: ${String(error)}`;
   } finally {
     onboardingOpenAccessibilitySettingsBtn.disabled = false;
+  }
+});
+
+onboardingCheckMicrophoneBtn.addEventListener('click', async () => {
+  onboardingCheckMicrophoneBtn.disabled = true;
+  onboardingMicrophoneStatusEl.textContent = 'Checking Microphone permission...';
+  try {
+    const permissionStatus = await invoke<MicrophonePermissionStatus>('check_microphone_permission');
+    const label = permissionStatus.is_supported
+      ? permissionStatus.is_granted
+        ? 'Granted'
+        : permissionStatus.status === 'unavailable'
+          ? 'Unavailable'
+          : 'Not granted'
+      : 'Unsupported';
+    onboardingMicrophoneStatusEl.textContent = `[${label}] ${permissionStatus.guidance}`;
+    renderMicrophoneStatus(permissionStatus);
+  } catch (error) {
+    onboardingMicrophoneStatusEl.textContent = `Microphone check failed: ${String(error)}`;
+  } finally {
+    onboardingCheckMicrophoneBtn.disabled = false;
+  }
+});
+
+onboardingOpenMicrophoneSettingsBtn.addEventListener('click', async () => {
+  onboardingOpenMicrophoneSettingsBtn.disabled = true;
+  try {
+    const message = await invoke<string>('open_microphone_settings');
+    onboardingMicrophoneStatusEl.textContent = message;
+    setMicrophoneStatusSummary(message, true);
+  } catch (error) {
+    onboardingMicrophoneStatusEl.textContent = `Failed to open settings: ${String(error)}`;
+  } finally {
+    onboardingOpenMicrophoneSettingsBtn.disabled = false;
   }
 });
 

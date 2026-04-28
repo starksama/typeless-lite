@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Keylesss</title>
+    <title>Desktop Dictation</title>
     <link rel="stylesheet" href="/src/style.css" />
     <script type="module" src="/src/main.ts" defer></script>
   </head>
@@ -17,7 +17,7 @@
         <div class="sidebar-surface">
           <div class="brand-lockup">
             <div class="brand-copy">
-              <p id="sidebar-brand-name" class="sidebar-title">Keylesss</p>
+              <p id="sidebar-brand-name" class="sidebar-title">Desktop Dictation</p>
             </div>
           </div>
 
@@ -470,6 +470,22 @@
 
                     <section class="support-card support-card-strong">
                       <div class="support-card-head">
+                        <h3>Microphone</h3>
+                        <strong id="microphone-status" class="support-card-status">Unknown</strong>
+                      </div>
+                      <div class="buttons">
+                        <button id="check-microphone-btn" type="button" class="ui-button ui-button-secondary">
+                          Check
+                        </button>
+                        <button id="open-microphone-settings-btn" type="button" class="ui-button ui-button-secondary">
+                          Open Settings
+                        </button>
+                      </div>
+                      <span id="settings-microphone-status" class="hidden">Unknown</span>
+                    </section>
+
+                    <section class="support-card support-card-strong">
+                      <div class="support-card-head">
                         <h3>Diagnostics</h3>
                         <strong id="settings-diagnostics-copy-status" class="support-card-status hidden"></strong>
                         <span id="settings-accessibility-status" class="hidden">Unknown</span>
@@ -510,7 +526,7 @@
         <p class="eyebrow">Permission required</p>
         <h2 id="accessibility-modal-title">Accessibility access is still needed</h2>
         <p id="accessibility-modal-description" class="subtle">
-          Keylesss needs Accessibility permission to paste into the currently focused input across apps and terminals.
+          This app needs Accessibility permission to paste into the currently focused input across apps and terminals.
         </p>
         <div class="buttons">
           <button id="accessibility-modal-open-settings-btn" type="button" class="ui-button">Open System Settings</button>
@@ -523,7 +539,7 @@
       <section class="modal-card onboarding-card modal-elevated">
         <div class="onboarding-header">
           <p id="onboarding-step-indicator" class="eyebrow">Step 1 of 5</p>
-          <h2 id="onboarding-title">Welcome to Keylesss</h2>
+          <h2 id="onboarding-title">Welcome</h2>
         </div>
 
         <section class="onboarding-step" data-onboarding-step="welcome">
@@ -538,17 +554,24 @@
         <section class="onboarding-step hidden" data-onboarding-step="permissions">
           <h3>Permissions checklist</h3>
           <p id="onboarding-permissions-copy" class="subtle">
-            Accessibility allows Keylesss to insert text into the active app. Microphone permission is also required.
+            Accessibility allows this app to insert text into the active app. Microphone permission is also required.
           </p>
           <div class="buttons">
             <button id="onboarding-check-accessibility-btn" type="button" class="ui-button ui-button-secondary">
               Check accessibility
             </button>
             <button id="onboarding-open-accessibility-settings-btn" type="button" class="ui-button ui-button-secondary">
-              Open System Settings
+              Open Accessibility Settings
+            </button>
+            <button id="onboarding-check-microphone-btn" type="button" class="ui-button ui-button-secondary">
+              Check microphone
+            </button>
+            <button id="onboarding-open-microphone-settings-btn" type="button" class="ui-button ui-button-secondary">
+              Open Microphone Settings
             </button>
           </div>
           <p id="onboarding-accessibility-status" class="hint">Not checked yet.</p>
+          <p id="onboarding-microphone-status" class="hint">Not checked yet.</p>
         </section>
 
         <section class="onboarding-step hidden" data-onboarding-step="api">

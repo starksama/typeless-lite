@@ -1,5 +1,6 @@
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
+import { APP_BRAND } from './app-config';
 
 type RuntimeStatus = {
   is_recording: boolean;
@@ -11,6 +12,8 @@ type RuntimeStatus = {
 const pillEl = document.querySelector<HTMLDivElement>('#overlay-pill')!;
 const labelEl = document.querySelector<HTMLDivElement>('#overlay-label')!;
 const meterBars = Array.from(document.querySelectorAll<HTMLSpanElement>('.overlay-bar'));
+
+document.title = `${APP_BRAND.displayName} Overlay`;
 
 function setMeter(level: number): void {
   const normalized = Math.max(0, Math.min(100, level)) / 100;
