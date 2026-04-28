@@ -1358,18 +1358,13 @@ function renderAccessibilityStatus(status: AccessibilityPermissionStatus): void 
       : 'Needs access'
     : 'Unsupported';
   setAccessibilityStatusSummary(label);
-}
-
-function showAccessibilityModal(): void {
-  accessibilityModalEl.classList.remove('hidden');
+  if (!status.is_supported || status.is_granted) {
+    hideAccessibilityModal();
+  }
 }
 
 function hideAccessibilityModal(): void {
   accessibilityModalEl.classList.add('hidden');
-}
-
-function shouldPromptForAccessibility(status: AccessibilityPermissionStatus): boolean {
-  return status.is_supported && !status.is_granted;
 }
 
 async function checkAndRenderAccessibilityStatus(): Promise<AccessibilityPermissionStatus> {
@@ -2176,10 +2171,7 @@ async function loadInitial(): Promise<void> {
 
   setAccessibilityStatusSummary('Checking...', true);
   try {
-    const permissionStatus = await checkAndRenderAccessibilityStatus();
-    if (shouldPromptForAccessibility(permissionStatus)) {
-      showAccessibilityModal();
-    }
+    await checkAndRenderAccessibilityStatus();
   } catch (error) {
     setAccessibilityStatusSummary('Check failed', true);
   }

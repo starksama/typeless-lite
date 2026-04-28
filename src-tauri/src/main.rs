@@ -4,7 +4,7 @@ use std::{
     collections::HashSet,
     fs,
     io::BufWriter,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::Command,
     sync::atomic::{AtomicU64, Ordering},
     sync::{Arc, Mutex},
@@ -65,6 +65,9 @@ const DEBUG_LOG_LIMIT: usize = 200;
 const MIC_METER_EMIT_INTERVAL_MS: u64 = 45;
 const MIC_METER_FLOOR_DB: f32 = -54.0;
 const MIC_METER_CEILING_DB: f32 = -6.0;
+const MIN_CAPTURED_AUDIO_MS: u64 = 250;
+const MIN_CAPTURE_RMS: f32 = 0.0015;
+const MIN_CAPTURE_PEAK: f32 = 0.01;
 #[cfg(target_os = "macos")]
 const MAC_FN_HOTKEY: &str = "Fn";
 #[cfg(target_os = "macos")]
@@ -381,6 +384,14 @@ struct StoppedRecording {
     recording_mode: String,
     pre_recording_clipboard_context: Option<String>,
     insertion_target_app: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct AudioCaptureStats {
+    duration_ms: u64,
+    sample_count: u64,
+    peak: f32,
+    rms: f32,
 }
 
 #[derive(Clone)]
@@ -783,7 +794,10 @@ fn open_accessibility_settings() -> Result<String, String> {
         for url in urls {
             match Command::new("open").arg(url).status() {
                 Ok(status) if status.success() => {
-                    return Ok("Opened macOS Privacy settings. Go to Accessibility and enable Keylesss.".to_string());
+                    return Ok(
+                        "Opened macOS Privacy settings. Go to Accessibility and enable Keylesss."
+                            .to_string(),
+                    );
                 }
                 _ => {}
             }
@@ -1063,7 +1077,7 @@ fn set_status(
     mic_level: Option<u8>,
     message: String,
 ) {
-    if let Ok(mut status) = state.runtime_status.lock() {
+    let status = if let Ok(mut status) = state.runtime_status.lock() {
         if let Some(v) = is_recording {
             status.is_recording = v;
         }
@@ -1074,9 +1088,14 @@ fn set_status(
             status.mic_level = v.min(100);
         }
         status.last_message = message;
-        update_tray_status(app, &status);
-        let _ = app.emit(APP_STATUS_EVENT, status.clone());
-    }
+        status.clone()
+    } else {
+        return;
+    };
+
+    update_tray_status(app, &status);
+    sync_overlay_window_visibility(app, &status);
+    let _ = app.emit(APP_STATUS_EVENT, status);
 }
 
 fn emit_mic_level(app: &AppHandle, mic_level: u8) {
@@ -1160,6 +1179,25 @@ fn ensure_overlay_window(app: &AppHandle) -> Result<(), String> {
     );
 
     Ok(())
+}
+
+fn sync_overlay_window_visibility(app: &AppHandle, status: &RuntimeStatus) {
+    if status.is_recording || status.is_processing {
+        if let Err(error) = ensure_overlay_window(app) {
+            eprintln!("[keylesss] overlay_window_failed error={error}");
+            return;
+        }
+        if let Some(window) = app.get_webview_window(OVERLAY_WINDOW_LABEL) {
+            let _ = window.set_always_on_top(true);
+            let _ = window.set_visible_on_all_workspaces(true);
+            let _ = window.show();
+        }
+        return;
+    }
+
+    if let Some(window) = app.get_webview_window(OVERLAY_WINDOW_LABEL) {
+        let _ = window.hide();
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1560,6 +1598,76 @@ mod transcription_prompt_tests {
     fn transcription_prompt_does_not_include_clipboard_reference() {
         let prompt = build_transcription_prompt("auto", "Monarch, Envio");
         assert!(!prompt.contains("Reference text for terminology only"));
+    }
+}
+
+#[cfg(test)]
+mod audio_capture_tests {
+    use super::{analyze_wav_capture, validate_audio_capture};
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    fn temp_wav_path(label: &str) -> PathBuf {
+        let epoch = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be valid")
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "keylesss-audio-capture-test-{label}-{}-{epoch}.wav",
+            std::process::id()
+        ))
+    }
+
+    fn write_test_wav(path: &Path, samples: &[i16]) {
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 16_000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut writer = hound::WavWriter::create(path, spec).expect("wav should be created");
+        for sample in samples {
+            writer.write_sample(*sample).expect("sample should write");
+        }
+        writer.finalize().expect("wav should finalize");
+    }
+
+    #[test]
+    fn rejects_empty_capture() {
+        let path = temp_wav_path("empty");
+        write_test_wav(&path, &[]);
+
+        let error = validate_audio_capture(&path).expect_err("empty audio should be rejected");
+
+        assert!(error.to_string().contains("No microphone audio"));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn rejects_silent_capture() {
+        let path = temp_wav_path("silent");
+        write_test_wav(&path, &vec![0; 16_000]);
+
+        let error = validate_audio_capture(&path).expect_err("silent audio should be rejected");
+
+        assert!(error.to_string().contains("No speech detected"));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn accepts_audible_capture() {
+        let path = temp_wav_path("audible");
+        write_test_wav(&path, &vec![1_500; 16_000]);
+
+        let stats = validate_audio_capture(&path).expect("audible audio should pass");
+
+        assert_eq!(stats.duration_ms, 1_000);
+        assert!(stats.rms > 0.04);
+        assert!(analyze_wav_capture(&path).expect("stats should read").peak > 0.04);
+        let _ = fs::remove_file(path);
     }
 }
 
@@ -2419,6 +2527,56 @@ fn maybe_emit_mic_level(level: f32, mic_meter: &MicMeterContext) {
     emit_mic_level(&mic_meter.app, state.smoothed_level.round() as u8);
 }
 
+fn analyze_wav_capture(wav_path: &Path) -> Result<AudioCaptureStats, AppError> {
+    let mut reader = hound::WavReader::open(wav_path)
+        .map_err(|e| AppError::Message(format!("Failed reading captured audio: {e}")))?;
+    let spec = reader.spec();
+    let channels = u64::from(spec.channels.max(1));
+    let sample_rate = u64::from(spec.sample_rate.max(1));
+
+    let mut sample_count = 0_u64;
+    let mut peak = 0.0_f32;
+    let mut sum_sq = 0.0_f64;
+    for sample in reader.samples::<i16>() {
+        let sample =
+            sample.map_err(|e| AppError::Message(format!("Failed reading audio sample: {e}")))?;
+        let normalized = (sample as f32 / i16::MAX as f32).clamp(-1.0, 1.0);
+        peak = peak.max(normalized.abs());
+        sum_sq += f64::from(normalized * normalized);
+        sample_count += 1;
+    }
+
+    let frame_count = sample_count / channels;
+    let duration_ms = frame_count.saturating_mul(1_000) / sample_rate;
+    let rms = if sample_count == 0 {
+        0.0
+    } else {
+        (sum_sq / sample_count as f64).sqrt() as f32
+    };
+
+    Ok(AudioCaptureStats {
+        duration_ms,
+        sample_count,
+        peak,
+        rms,
+    })
+}
+
+fn validate_audio_capture(wav_path: &Path) -> Result<AudioCaptureStats, AppError> {
+    let stats = analyze_wav_capture(wav_path)?;
+    if stats.sample_count == 0 || stats.duration_ms < MIN_CAPTURED_AUDIO_MS {
+        return Err(AppError::Message(
+            "No microphone audio was captured. Check macOS Microphone permission for Keylesss, then try again.".to_string(),
+        ));
+    }
+    if stats.rms < MIN_CAPTURE_RMS && stats.peak < MIN_CAPTURE_PEAK {
+        return Err(AppError::Message(
+            "No speech detected. Check the selected microphone and macOS Microphone permission, then try again.".to_string(),
+        ));
+    }
+    Ok(stats)
+}
+
 async fn process_audio_pipeline(
     app: &AppHandle,
     state: &State<'_, AppState>,
@@ -2455,6 +2613,17 @@ async fn process_audio_pipeline(
                 recording_mode,
                 active_app_name.as_deref().unwrap_or("none"),
                 clipboard_reference.is_some()
+            ),
+        );
+        let audio_stats = validate_audio_capture(&wav_path)?;
+        debug_log_state(
+            state,
+            format!(
+                "audio_capture_validated duration_ms={} samples={} rms={:.5} peak={:.5}",
+                audio_stats.duration_ms,
+                audio_stats.sample_count,
+                audio_stats.rms,
+                audio_stats.peak
             ),
         );
         let transcription = transcribe_audio(&state.http_client, &settings, &wav_path).await?;
@@ -4307,7 +4476,6 @@ fn main() {
                 .build(),
         )
         .setup(|app| {
-            ensure_overlay_window(app.handle()).map_err(Box::<dyn std::error::Error>::from)?;
             let settings = load_settings(app.handle());
             let http_client = reqwest::Client::builder()
                 .timeout(Duration::from_secs(API_CLIENT_TIMEOUT_SECS))
