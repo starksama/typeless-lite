@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Typeless Lite Overlay</title>
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+
+      html,
+      body {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        background: transparent;
+        overflow: hidden;
+        font-family: "SF Pro Display", "Segoe UI", sans-serif;
+        pointer-events: none;
+      }
+
+      body {
+        display: grid;
+        place-items: center;
+      }
+
+      .overlay-shell {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 100%;
+        height: 100%;
+      }
+
+      .overlay-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 12px;
+        min-height: 44px;
+        padding: 0 16px;
+        border-radius: 999px;
+        border: 1px solid rgba(148, 163, 184, 0.18);
+        background: rgba(15, 23, 33, 0.88);
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.22);
+        color: rgba(241, 245, 249, 0.96);
+        backdrop-filter: blur(18px);
+        opacity: 0;
+        transform: translateY(8px) scale(0.98);
+        transition: opacity 140ms ease, transform 140ms ease;
+      }
+
+      .overlay-pill.is-visible {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+      }
+
+      .overlay-pill[data-tone="recording"] {
+        border-color: rgba(248, 113, 113, 0.28);
+        background: rgba(34, 14, 16, 0.9);
+      }
+
+      .overlay-pill[data-tone="processing"] {
+        border-color: rgba(214, 158, 46, 0.26);
+        background: rgba(40, 30, 12, 0.9);
+      }
+
+      .overlay-icon {
+        position: relative;
+        width: 14px;
+        height: 14px;
+        flex: 0 0 auto;
+      }
+
+      .overlay-icon-dot {
+        position: absolute;
+        inset: 0;
+        border-radius: 999px;
+        background: rgba(148, 163, 184, 0.92);
+      }
+
+      .overlay-pill[data-tone="recording"] .overlay-icon-dot {
+        background: #f87171;
+        animation: pulse 1s ease-in-out infinite;
+      }
+
+      .overlay-spinner {
+        display: none;
+        width: 14px;
+        height: 14px;
+        border-radius: 999px;
+        border: 2px solid rgba(214, 158, 46, 0.22);
+        border-top-color: #f4d58d;
+        animation: spin 0.8s linear infinite;
+      }
+
+      .overlay-pill[data-tone="processing"] .overlay-spinner {
+        display: block;
+      }
+
+      .overlay-pill[data-tone="processing"] .overlay-icon-dot {
+        display: none;
+      }
+
+      .overlay-label {
+        font-size: 13px;
+        font-weight: 560;
+        letter-spacing: 0.01em;
+        white-space: nowrap;
+      }
+
+      .overlay-meter {
+        display: none;
+        align-items: end;
+        gap: 3px;
+        height: 16px;
+      }
+
+      .overlay-pill[data-tone="recording"] .overlay-meter {
+        display: inline-flex;
+      }
+
+      .overlay-bar {
+        width: 3px;
+        min-height: 4px;
+        border-radius: 999px;
+        background: rgba(248, 113, 113, 0.9);
+        transition: height 90ms ease;
+      }
+
+      @keyframes pulse {
+        0%, 100% { transform: scale(1); opacity: 0.92; }
+        50% { transform: scale(1.22); opacity: 0.58; }
+      }
+
+      @keyframes spin {
+        to { transform: rotate(360deg); }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="overlay-shell">
+      <div id="overlay-pill" class="overlay-pill" data-tone="idle" aria-hidden="true">
+        <div class="overlay-icon" aria-hidden="true">
+          <div class="overlay-icon-dot"></div>
+          <div class="overlay-spinner"></div>
+        </div>
+        <div id="overlay-label" class="overlay-label">Ready</div>
+        <div id="overlay-meter" class="overlay-meter" aria-hidden="true">
+          <span class="overlay-bar"></span>
+          <span class="overlay-bar"></span>
+          <span class="overlay-bar"></span>
+          <span class="overlay-bar"></span>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="/src/overlay.ts"></script>
+  </body>
+</html>

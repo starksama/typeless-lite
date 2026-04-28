@@ -167,12 +167,12 @@
 
               <div class="buttons home-actions">
                 <button id="home-toggle-btn" type="button" class="ui-button">Start recording</button>
-                <button id="home-fast-mode-btn" type="button" class="ui-button ui-button-secondary">Turn Fast Mode On</button>
+                <button id="home-fast-mode-btn" type="button" class="ui-button ui-button-secondary">Turn polishing On</button>
               </div>
             </div>
 
             <p class="hint home-fast-mode-hint">
-              Fast Mode <strong id="home-fast-mode-state">OFF</strong>
+              Additional polishing <strong id="home-fast-mode-state">OFF</strong>
             </p>
 
             <div class="home-stats" aria-label="Usage summary">
@@ -353,13 +353,12 @@
                       <div class="shortcut-item-copy">
                         <span class="ui-label">Hold to speak</span>
                       </div>
-                      <input id="holdHotkey" type="text" value="Cmd+Shift+Space" hidden readonly required />
-                      <button
-                        id="hold-hotkey-trigger-btn"
-                        type="button"
-                        class="shortcut-trigger"
-                        aria-describedby="hold-hotkey-validation"
-                      ></button>
+                      <div class="shortcut-item-body">
+                        <div id="hold-shortcut-list" class="shortcut-entry-list"></div>
+                        <button id="hold-shortcut-add-btn" type="button" class="ui-button ui-button-secondary shortcut-add-btn">
+                          Add shortcut
+                        </button>
+                      </div>
                       <p id="hold-hotkey-validation" class="field-message hidden" role="status" aria-live="polite"></p>
                     </section>
 
@@ -367,15 +366,15 @@
                       <div class="shortcut-item-copy">
                         <span class="ui-label">Hands-free</span>
                       </div>
-                      <input id="toggleHotkey" type="text" value="Cmd+Option+Space" hidden readonly required />
-                      <button
-                        id="toggle-hotkey-trigger-btn"
-                        type="button"
-                        class="shortcut-trigger"
-                        aria-describedby="toggle-hotkey-validation"
-                      ></button>
+                      <div class="shortcut-item-body">
+                        <div id="toggle-shortcut-list" class="shortcut-entry-list"></div>
+                        <button id="toggle-shortcut-add-btn" type="button" class="ui-button ui-button-secondary shortcut-add-btn">
+                          Add shortcut
+                        </button>
+                      </div>
                       <p id="toggle-hotkey-validation" class="field-message hidden" role="status" aria-live="polite"></p>
                     </section>
+
                   </div>
                 </section>
 
@@ -401,13 +400,13 @@
                     </label>
 
                     <label class="ui-field">
-                      <span class="ui-label">Formatter model</span>
+                      <span class="ui-label">Polishing model</span>
                       <input id="formatModel" class="ui-input" type="text" value="gpt-4o-mini" required />
                     </label>
                   </div>
 
                   <label class="ui-field">
-                    <span class="ui-label">Prompt template</span>
+                    <span class="ui-label">Polishing prompt</span>
                     <textarea id="promptTemplate" class="ui-input" rows="6" required></textarea>
                   </label>
 
@@ -423,17 +422,17 @@
 
                   <div class="toggle-grid">
                     <label class="toggle-card checkbox-label">
-                      <input id="formatEnabled" type="checkbox" checked />
+                      <input id="formatEnabled" type="checkbox" />
                       <span>
-                        <strong>Run formatting pass</strong>
-                        <span>Slower, but cleaner and more polished output.</span>
+                        <strong>Additional polishing</strong>
+                        <span>Optional extra OpenAI pass after transcription for cleanup and style.</span>
                       </span>
                     </label>
 
                     <label class="toggle-card checkbox-label">
                       <input id="skipFormatterInTerminals" type="checkbox" checked />
                       <span>
-                        <strong>Skip formatting in terminals</strong>
+                        <strong>Skip polishing in terminals</strong>
                         <span>Safer for shell commands and command-line workflows.</span>
                       </span>
                     </label>
@@ -442,7 +441,7 @@
                       <input id="includeClipboardContext" type="checkbox" checked />
                       <span>
                         <strong>Use clipboard context</strong>
-                        <span>Include current clipboard text as optional prompt context when formatting runs.</span>
+                        <span>Include current clipboard text as optional terminology context when polishing runs.</span>
                       </span>
                     </label>
                   </div>

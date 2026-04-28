@@ -1144,9 +1144,9 @@ textarea.ui-input {
 
 .shortcut-item {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 140px) minmax(0, 1fr);
   gap: 12px 16px;
-  align-items: center;
+  align-items: start;
   padding: 14px 16px;
   border: 1px solid var(--stroke);
   border-radius: 12px;
@@ -1156,6 +1156,38 @@ textarea.ui-input {
 .shortcut-item-copy {
   display: grid;
   gap: 0;
+}
+
+.shortcut-item > .field-message {
+  grid-column: 1 / -1;
+}
+
+.shortcut-item-body {
+  display: grid;
+  gap: 10px;
+}
+
+.shortcut-entry-list {
+  display: grid;
+  gap: 8px;
+}
+
+.shortcut-entry-list.is-dirty .shortcut-trigger:not(.is-capturing) {
+  border-color: rgba(214, 158, 46, 0.26);
+}
+
+.shortcut-entry {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.shortcut-add-btn,
+.shortcut-remove-btn {
+  min-height: 32px;
+  padding: 0 10px;
+  font-size: 0.72rem;
 }
 
 .hotkey-display,
