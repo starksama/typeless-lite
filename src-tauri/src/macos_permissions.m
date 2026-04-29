@@ -1,5 +1,17 @@
 #import <AVFoundation/AVFoundation.h>
+#import <ApplicationServices/ApplicationServices.h>
 #import <dispatch/dispatch.h>
+
+bool keylesss_accessibility_is_trusted(bool prompt) {
+  if (prompt) {
+    NSDictionary *options = @{
+      (__bridge id)kAXTrustedCheckOptionPrompt: @YES
+    };
+    return AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)options);
+  }
+
+  return AXIsProcessTrusted();
+}
 
 int keylesss_microphone_authorization_status(void) {
   SEL selector = @selector(authorizationStatusForMediaType:);

@@ -19,9 +19,7 @@ use core_foundation::{
 };
 #[cfg(target_os = "macos")]
 use core_foundation_sys::{
-    base::{kCFAllocatorDefault, CFGetTypeID, CFRange, CFTypeID},
-    mach_port::{CFMachPortCreateRunLoopSource, CFMachPortInvalidate, CFMachPortRef},
-    runloop::{kCFRunLoopCommonModes, CFRunLoopAddSource, CFRunLoopGetMain},
+    base::{CFGetTypeID, CFRange, CFTypeID},
     string::CFStringGetTypeID,
 };
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -32,15 +30,12 @@ use tauri::{
     tray::TrayIconBuilder,
     AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder,
 };
-#[cfg(not(target_os = "macos"))]
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut, ShortcutState};
 
 const APP_STATUS_EVENT: &str = "runtime-status";
 const APP_CONFIG_JSON: &str = include_str!("../../app.config.json");
 const OVERLAY_WINDOW_LABEL: &str = "overlay";
-const NATIVE_HOTKEY_CAPTURE_EVENT: &str = "native-hotkey-captured";
-const NATIVE_HOTKEY_FN_STATE_EVENT: &str = "native-hotkey-fn-state";
 const TRAY_ID: &str = "main-tray";
 const PRE_RECORDING_COPY_DELAY_MS: u64 = 80;
 const PRE_PASTE_DELAY_MS: u64 = 120;
@@ -70,15 +65,7 @@ const MIN_CAPTURED_AUDIO_MS: u64 = 250;
 const MIN_CAPTURE_RMS: f32 = 0.0015;
 const MIN_CAPTURE_PEAK: f32 = 0.01;
 #[cfg(target_os = "macos")]
-const MAC_FN_HOTKEY: &str = "Fn";
-#[cfg(target_os = "macos")]
-const MAC_FN_KEYCODE: i64 = 0x3f;
-#[cfg(target_os = "macos")]
 const MAC_V_KEYCODE: u16 = 0x09;
-#[cfg(target_os = "macos")]
-const NX_SECONDARYFNMASK: u64 = 0x00800000;
-#[cfg(target_os = "macos")]
-const MAC_FN_DISAMBIGUATION_DELAY_MS: u64 = 140;
 static HISTORY_ID_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static APP_CONFIG: OnceLock<AppConfig> = OnceLock::new();
 
@@ -310,6 +297,8 @@ struct MicrophonePermissionStatus {
 struct AppConfig {
     #[serde(rename = "displayName")]
     display_name: String,
+    #[serde(rename = "bundleIdentifier")]
+    bundle_identifier: String,
     #[serde(rename = "logPrefix")]
     log_prefix: String,
     #[serde(rename = "tempFilePrefix")]
@@ -320,6 +309,7 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             display_name: "Desktop Dictation".to_string(),
+            bundle_identifier: "com.keylesss.desktop".to_string(),
             log_prefix: "app".to_string(),
             temp_file_prefix: "app".to_string(),
         }
@@ -334,6 +324,10 @@ fn app_display_name() -> &'static str {
     app_config().display_name.as_str()
 }
 
+fn app_bundle_identifier() -> &'static str {
+    app_config().bundle_identifier.as_str()
+}
+
 fn app_log_prefix() -> &'static str {
     app_config().log_prefix.as_str()
 }
@@ -345,38 +339,13 @@ fn app_temp_file_prefix() -> &'static str {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RegisteredShortcutBinding {
     Global(Shortcut),
-    #[cfg(target_os = "macos")]
-    MacFn(MacFnShortcut),
-}
-
-#[cfg(target_os = "macos")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct MacFnShortcut {
-    base: Option<Shortcut>,
 }
 
 impl RegisteredShortcutBinding {
     fn global(self) -> Option<Shortcut> {
         match self {
             Self::Global(shortcut) => Some(shortcut),
-            #[cfg(target_os = "macos")]
-            Self::MacFn(_) => None,
         }
-    }
-
-    #[cfg(target_os = "macos")]
-    fn mac_fn(self) -> Option<MacFnShortcut> {
-        match self {
-            Self::MacFn(binding) => Some(binding),
-            Self::Global(_) => None,
-        }
-    }
-}
-
-#[cfg(target_os = "macos")]
-impl MacFnShortcut {
-    fn fn_only(self) -> bool {
-        self.base.is_none()
     }
 }
 
@@ -386,29 +355,11 @@ struct RegisteredShortcuts {
     toggle: Vec<RegisteredShortcutBinding>,
 }
 
-#[cfg(target_os = "macos")]
-#[derive(Clone)]
-struct MacShortcutMonitorContext {
-    app_handle: AppHandle,
-}
-
 struct AppState {
     settings: Mutex<Settings>,
     runtime_status: Mutex<RuntimeStatus>,
     recorder: Mutex<Option<RecorderSession>>,
     current_shortcuts: Mutex<RegisteredShortcuts>,
-    #[cfg(target_os = "macos")]
-    mac_shortcut_monitor_context: Arc<MacShortcutMonitorContext>,
-    #[cfg(target_os = "macos")]
-    mac_shortcut_event_tap_started: Mutex<bool>,
-    #[cfg(target_os = "macos")]
-    native_hotkey_capture_active: Mutex<bool>,
-    #[cfg(target_os = "macos")]
-    native_hotkey_capture_saw_non_fn_key: Mutex<bool>,
-    #[cfg(target_os = "macos")]
-    mac_fn_key_down: Mutex<bool>,
-    #[cfg(target_os = "macos")]
-    mac_fn_pending_sequence: AtomicU64,
     http_client: reqwest::Client,
     transcript_history: Mutex<Vec<TranscriptHistoryEntry>>,
     durable_draft: Mutex<Option<DurableDraft>>,
@@ -593,51 +544,32 @@ fn copy_text_to_clipboard(text: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn set_native_hotkey_capture(
+fn set_hotkey_capture_mode(
     app: AppHandle,
     state: State<AppState>,
     active: bool,
 ) -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    {
-        if active {
-            ensure_mac_shortcut_event_tap(&state)?;
-        }
-        let mut lock = state
-            .native_hotkey_capture_active
+    if active {
+        let mut current = state
+            .current_shortcuts
             .lock()
-            .map_err(|_| "Failed to update hotkey capture state".to_string())?;
-        *lock = active;
-
-        if active {
-            let mut current = state
-                .current_shortcuts
-                .lock()
-                .map_err(|_| "Failed to lock current shortcuts".to_string())?;
-            unregister_registered_shortcuts(&app, &mut current);
-            debug_log_state(&state, "shortcut_capture_mode_enabled".to_string());
-        } else {
-            let settings = state
-                .settings
-                .lock()
-                .map_err(|_| "Failed to lock settings".to_string())?
-                .clone();
-            register_shortcuts_strict(
-                &app,
-                &state,
-                &settings.hold_hotkeys,
-                &settings.toggle_hotkeys,
-            )
-            .map_err(|error| error.to_string())?;
-            debug_log_state(&state, "shortcut_capture_mode_disabled".to_string());
-        }
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = app;
-        let _ = &state;
-        let _ = active;
+            .map_err(|_| "Failed to lock current shortcuts".to_string())?;
+        unregister_registered_shortcuts(&app, &mut current);
+        debug_log_state(&state, "shortcut_capture_mode_enabled".to_string());
+    } else {
+        let settings = state
+            .settings
+            .lock()
+            .map_err(|_| "Failed to lock settings".to_string())?
+            .clone();
+        register_shortcuts_strict(
+            &app,
+            &state,
+            &settings.hold_hotkeys,
+            &settings.toggle_hotkeys,
+        )
+        .map_err(|error| error.to_string())?;
+        debug_log_state(&state, "shortcut_capture_mode_disabled".to_string());
     }
 
     Ok(())
@@ -793,29 +725,26 @@ async fn test_api_connection(state: State<'_, AppState>) -> Result<String, Strin
 
 #[tauri::command]
 fn check_accessibility_permission() -> AccessibilityPermissionStatus {
+    current_accessibility_permission_status()
+}
+
+#[tauri::command]
+fn request_accessibility_permission() -> AccessibilityPermissionStatus {
     #[cfg(target_os = "macos")]
     {
-        let is_trusted = unsafe { AXIsProcessTrusted() } != 0;
-        if is_trusted {
-            AccessibilityPermissionStatus {
-                platform: "macOS".to_string(),
-                is_supported: true,
-                is_granted: true,
-                status: "granted".to_string(),
-                guidance: "Accessibility permission is granted.".to_string(),
-            }
-        } else {
-            let app_name = app_display_name();
-            AccessibilityPermissionStatus {
-                platform: "macOS".to_string(),
-                is_supported: true,
-                is_granted: false,
-                status: "missing".to_string(),
-                guidance: format!(
-                    "Accessibility permission is not granted. Open System Settings > Privacy & Security > Accessibility and enable {app_name}."
-                ),
-            }
-        }
+        accessibility_status_from_macos_trust(unsafe { keylesss_accessibility_is_trusted(true) })
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        current_accessibility_permission_status()
+    }
+}
+
+fn current_accessibility_permission_status() -> AccessibilityPermissionStatus {
+    #[cfg(target_os = "macos")]
+    {
+        accessibility_status_from_macos_trust(unsafe { keylesss_accessibility_is_trusted(false) })
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -827,6 +756,27 @@ fn check_accessibility_permission() -> AccessibilityPermissionStatus {
             status: "unsupported".to_string(),
             guidance: "Accessibility permission checks are currently implemented for macOS only."
                 .to_string(),
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn accessibility_status_from_macos_trust(is_trusted: bool) -> AccessibilityPermissionStatus {
+    if is_trusted {
+        AccessibilityPermissionStatus {
+            platform: "macOS".to_string(),
+            is_supported: true,
+            is_granted: true,
+            status: "granted".to_string(),
+            guidance: "Enabled".to_string(),
+        }
+    } else {
+        AccessibilityPermissionStatus {
+            platform: "macOS".to_string(),
+            is_supported: true,
+            is_granted: false,
+            status: "missing".to_string(),
+            guidance: "Needs access".to_string(),
         }
     }
 }
@@ -858,6 +808,33 @@ fn open_accessibility_settings() -> Result<String, String> {
     #[cfg(not(target_os = "macos"))]
     {
         Err("Opening Accessibility settings is only supported on macOS in this app.".to_string())
+    }
+}
+
+#[tauri::command]
+fn reset_accessibility_permission() -> Result<String, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let output = Command::new("tccutil")
+            .args(["reset", "Accessibility", app_bundle_identifier()])
+            .output()
+            .map_err(|e| format!("Failed to reset macOS Accessibility access: {e}"))?;
+
+        if output.status.success() {
+            return Ok("Accessibility reset. Enable it again in System Settings.".to_string());
+        }
+
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        Err(if stderr.is_empty() {
+            "macOS did not reset Accessibility access.".to_string()
+        } else {
+            format!("macOS did not reset Accessibility access: {stderr}")
+        })
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err("Resetting Accessibility access is only supported on macOS in this app.".to_string())
     }
 }
 
@@ -902,7 +879,9 @@ fn request_microphone_permission(state: State<AppState>) -> MicrophonePermission
 }
 
 fn current_microphone_permission_status() -> MicrophonePermissionStatus {
-    microphone_status_from_macos_authorization(unsafe { keylesss_microphone_authorization_status() })
+    microphone_status_from_macos_authorization(unsafe {
+        keylesss_microphone_authorization_status()
+    })
 }
 
 fn request_microphone_permission_status() -> MicrophonePermissionStatus {
@@ -968,6 +947,7 @@ fn microphone_status_from_macos_authorization(status: i32) -> MicrophonePermissi
 }
 
 unsafe extern "C" {
+    fn keylesss_accessibility_is_trusted(prompt: bool) -> bool;
     fn keylesss_microphone_authorization_status() -> i32;
     fn keylesss_request_microphone_access() -> bool;
 }
@@ -1439,46 +1419,28 @@ enum ShortcutBindingError {
     EmptyShortcut(&'static str),
     #[error("Each shortcut must be unique across hold and hands-free actions.")]
     DuplicateBindings,
-    #[error("{label} is invalid. Use one supported key with one or two modifiers. Modifier-only shortcuts are not supported here yet. Single F keys also work, and macOS supports Fn by itself.")]
+    #[error("{label} is invalid. Use one supported key with one or two modifiers. Modifier-only shortcuts are not supported here yet. Single F keys also work.")]
     InvalidFormat { label: &'static str },
-    #[error("{label} must use one supported key with one or two modifiers. Modifier-only shortcuts are not supported here yet. Single F keys also work, and macOS supports Fn by itself.")]
+    #[error("{label} must use one supported key with one or two modifiers. Modifier-only shortcuts are not supported here yet. Single F keys also work.")]
     PolicyViolation { label: &'static str },
-    #[error("{label} needs macOS Accessibility access. Open Settings > Access and enable this app, then save again.")]
-    AccessibilityRequired { label: &'static str },
-    #[cfg_attr(target_os = "macos", allow(dead_code))]
     #[error("{label} isn't available right now. Choose another shortcut.")]
     Unavailable { label: &'static str },
     #[error("Failed to lock shortcut state.")]
     ShortcutStateLock,
 }
 
-struct ShortcutRegistrationResult {
-    hold: Vec<ShortcutBindingRegistration>,
-    toggle: Vec<ShortcutBindingRegistration>,
-}
-
 fn unregister_registered_shortcuts(app: &AppHandle, registered: &mut RegisteredShortcuts) {
-    #[cfg(target_os = "macos")]
+    for shortcut in std::mem::take(&mut registered.hold)
+        .into_iter()
+        .filter_map(|binding| binding.global())
     {
-        let _ = app;
-        registered.hold.clear();
-        registered.toggle.clear();
+        let _ = app.global_shortcut().unregister(shortcut);
     }
-
-    #[cfg(not(target_os = "macos"))]
+    for shortcut in std::mem::take(&mut registered.toggle)
+        .into_iter()
+        .filter_map(|binding| binding.global())
     {
-        for shortcut in std::mem::take(&mut registered.hold)
-            .into_iter()
-            .filter_map(|binding| binding.global())
-        {
-            let _ = app.global_shortcut().unregister(shortcut);
-        }
-        for shortcut in std::mem::take(&mut registered.toggle)
-            .into_iter()
-            .filter_map(|binding| binding.global())
-        {
-            let _ = app.global_shortcut().unregister(shortcut);
-        }
+        let _ = app.global_shortcut().unregister(shortcut);
     }
 }
 
@@ -1488,10 +1450,6 @@ fn normalize_requested_hotkey(input: &str) -> String {
         .split('+')
         .map(|part| {
             let trimmed = part.trim();
-            #[cfg(target_os = "macos")]
-            if trimmed.eq_ignore_ascii_case(MAC_FN_HOTKEY) {
-                return MAC_FN_HOTKEY.to_string();
-            }
             trimmed.to_string()
         })
         .filter(|part| !part.is_empty())
@@ -1514,70 +1472,17 @@ fn normalize_requested_hotkeys(hotkeys: &[String]) -> Vec<String> {
     normalized
 }
 
-#[cfg(target_os = "macos")]
-fn parse_mac_fn_shortcut(
-    requested_hotkey: &str,
-    action: ShortcutAction,
-) -> Result<MacFnShortcut, ShortcutBindingError> {
-    let tokens = requested_hotkey
-        .split('+')
-        .map(|part| part.trim())
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>();
-    let fn_count = tokens
-        .iter()
-        .filter(|part| part.eq_ignore_ascii_case(MAC_FN_HOTKEY))
-        .count();
-
-    if fn_count != 1 {
-        return Err(ShortcutBindingError::InvalidFormat {
-            label: action.shortcut_label(),
-        });
-    }
-
-    let remaining = tokens
-        .into_iter()
-        .filter(|part| !part.eq_ignore_ascii_case(MAC_FN_HOTKEY))
-        .collect::<Vec<_>>();
-    if remaining.is_empty() {
-        return Ok(MacFnShortcut { base: None });
-    }
-
-    let parsed = remaining.join("+").parse::<Shortcut>().map_err(|_| {
-        ShortcutBindingError::InvalidFormat {
-            label: action.shortcut_label(),
-        }
-    })?;
-    validate_mac_fn_shortcut_policy(&parsed, action)?;
-    Ok(MacFnShortcut { base: Some(parsed) })
-}
-
-#[cfg(target_os = "macos")]
-fn validate_mac_fn_shortcut_policy(
-    shortcut: &Shortcut,
-    action: ShortcutAction,
-) -> Result<(), ShortcutBindingError> {
-    let modifier_count = shortcut_modifier_count(shortcut) + 1;
-    if (1..=3).contains(&modifier_count) {
-        return Ok(());
-    }
-
-    Err(ShortcutBindingError::PolicyViolation {
-        label: action.shortcut_label(),
-    })
-}
-
 fn parse_shortcut_binding_value(
     requested_hotkey: &str,
     action: ShortcutAction,
 ) -> Result<RegisteredShortcutBinding, ShortcutBindingError> {
-    #[cfg(target_os = "macos")]
     if requested_hotkey
         .split('+')
-        .any(|part| part.trim().eq_ignore_ascii_case(MAC_FN_HOTKEY))
+        .any(|part| part.trim().eq_ignore_ascii_case("Fn"))
     {
-        return parse_mac_fn_shortcut(requested_hotkey, action)
-            .map(RegisteredShortcutBinding::MacFn);
+        return Err(ShortcutBindingError::InvalidFormat {
+            label: action.shortcut_label(),
+        });
     }
 
     let shortcut =
@@ -1678,10 +1583,7 @@ fn validate_shortcut_policy(
 
 #[cfg(test)]
 mod shortcut_policy_tests {
-    use super::{
-        parse_shortcut_binding_value, validate_mac_fn_shortcut_policy, validate_shortcut_policy,
-        RegisteredShortcutBinding, ShortcutAction,
-    };
+    use super::{parse_shortcut_binding_value, validate_shortcut_policy, ShortcutAction};
     use tauri_plugin_global_shortcut::Shortcut;
 
     #[test]
@@ -1725,35 +1627,14 @@ mod shortcut_policy_tests {
         assert!("Ctrl+Alt".parse::<Shortcut>().is_err());
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
-    fn accepts_fn_shortcut_binding() {
-        let binding =
-            parse_shortcut_binding_value("Fn", ShortcutAction::Hold).expect("Fn should parse");
-        assert!(matches!(
-            binding,
-            RegisteredShortcutBinding::MacFn(super::MacFnShortcut { base: None })
-        ));
+    fn rejects_fn_shortcut_binding() {
+        assert!(parse_shortcut_binding_value("Fn", ShortcutAction::Hold).is_err());
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
-    fn accepts_fn_plus_key_binding() {
-        let binding = parse_shortcut_binding_value("Fn+Space", ShortcutAction::Toggle)
-            .expect("Fn+Space should parse");
-        assert!(matches!(
-            binding,
-            RegisteredShortcutBinding::MacFn(super::MacFnShortcut { base: Some(_) })
-        ));
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn accepts_fn_plus_modifier_plus_key_policy() {
-        let shortcut = "Ctrl+Space"
-            .parse::<Shortcut>()
-            .expect("shortcut should parse");
-        assert!(validate_mac_fn_shortcut_policy(&shortcut, ShortcutAction::Toggle).is_ok());
+    fn rejects_fn_plus_key_binding() {
+        assert!(parse_shortcut_binding_value("Fn+Space", ShortcutAction::Toggle).is_err());
     }
 }
 
@@ -1856,60 +1737,6 @@ mod audio_capture_tests {
 }
 
 #[cfg(test)]
-mod mac_capture_tests {
-    #[cfg(target_os = "macos")]
-    use super::{
-        action_matches_global_shortcut, build_mac_fn_capture_candidate,
-        parse_shortcut_binding_value, RegisteredShortcuts, ShortcutAction,
-        CG_EVENT_FLAG_MASK_COMMAND,
-    };
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn builds_fn_only_combo_string_for_space() {
-        let candidate = build_mac_fn_capture_candidate(0x31, 0).expect("candidate");
-        assert_eq!(candidate, "Fn+Space");
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn builds_fn_modifier_combo_string() {
-        let candidate = build_mac_fn_capture_candidate(0x31, 0x0004_0000).expect("candidate");
-        assert_eq!(candidate, "Fn+Ctrl+Space");
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn matches_cmd_digit_shortcut_before_target_app_receives_it() {
-        let binding =
-            parse_shortcut_binding_value("Cmd+2", ShortcutAction::Toggle).expect("shortcut");
-        let shortcuts = RegisteredShortcuts {
-            hold: Vec::new(),
-            toggle: vec![binding],
-        };
-
-        assert!(action_matches_global_shortcut(
-            &shortcuts,
-            ShortcutAction::Toggle,
-            0x13,
-            CG_EVENT_FLAG_MASK_COMMAND
-        ));
-        assert!(!action_matches_global_shortcut(
-            &shortcuts,
-            ShortcutAction::Hold,
-            0x13,
-            CG_EVENT_FLAG_MASK_COMMAND
-        ));
-        assert!(!action_matches_global_shortcut(
-            &shortcuts,
-            ShortcutAction::Toggle,
-            0x14,
-            CG_EVENT_FLAG_MASK_COMMAND
-        ));
-    }
-}
-
-#[cfg(test)]
 mod settings_compat_tests {
     use super::Settings;
 
@@ -1941,68 +1768,56 @@ mod settings_compat_tests {
     }
 }
 
+#[cfg(all(test, target_os = "macos"))]
+mod permission_status_tests {
+    use super::accessibility_status_from_macos_trust;
+
+    #[test]
+    fn accessibility_status_copy_stays_compact() {
+        let granted = accessibility_status_from_macos_trust(true);
+        assert!(granted.is_granted);
+        assert_eq!(granted.guidance, "Enabled");
+
+        let missing = accessibility_status_from_macos_trust(false);
+        assert!(!missing.is_granted);
+        assert_eq!(missing.guidance, "Needs access");
+    }
+}
+
 fn register_shortcut_binding(
     app: &AppHandle,
     state: &State<AppState>,
     binding: ShortcutBindingRegistration,
     action: ShortcutAction,
 ) -> Result<ShortcutBindingRegistration, ShortcutBindingError> {
-    #[cfg(target_os = "macos")]
-    {
-        let _ = app;
-        ensure_mac_shortcut_event_tap(state).map_err(|error| {
+    let RegisteredShortcutBinding::Global(shortcut) = binding.binding;
+    match app.global_shortcut().register(shortcut) {
+        Ok(()) => {
             debug_log_state(
                 state,
                 format!(
-                    "shortcut_register_failed requested={} error={}",
-                    binding.requested_hotkey, error
+                    "shortcut_register_succeeded mode={} requested={} registered={}",
+                    action.as_str(),
+                    binding.requested_hotkey,
+                    shortcut
                 ),
             );
-            ShortcutBindingError::AccessibilityRequired {
-                label: action.shortcut_label(),
-            }
-        })?;
-        Ok(binding)
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    match binding.binding {
-        RegisteredShortcutBinding::Global(shortcut) => {
-            match app.global_shortcut().register(shortcut) {
-                Ok(()) => {
-                    debug_log_state(
-                        state,
-                        format!(
-                            "shortcut_register_succeeded mode={} requested={} registered={}",
-                            action.as_str(),
-                            binding.requested_hotkey,
-                            shortcut
-                        ),
-                    );
-                    Ok(binding)
-                }
-                Err(error) => {
-                    debug_log_state(
-                        state,
-                        format!(
-                            "shortcut_register_failed mode={} requested={} error={}",
-                            action.as_str(),
-                            binding.requested_hotkey,
-                            error
-                        ),
-                    );
-                    Err(ShortcutBindingError::Unavailable {
-                        label: action.shortcut_label(),
-                    })
-                }
-            }
+            Ok(binding)
         }
-        #[cfg(target_os = "macos")]
-        RegisteredShortcutBinding::MacFn(_) => Ok(binding),
-        #[cfg(not(target_os = "macos"))]
-        RegisteredShortcutBinding::MacFn(_) => Err(ShortcutBindingError::InvalidFormat {
-            label: action.shortcut_label(),
-        }),
+        Err(error) => {
+            debug_log_state(
+                state,
+                format!(
+                    "shortcut_register_failed mode={} requested={} error={}",
+                    action.as_str(),
+                    binding.requested_hotkey,
+                    error
+                ),
+            );
+            Err(ShortcutBindingError::Unavailable {
+                label: action.shortcut_label(),
+            })
+        }
     }
 }
 
@@ -2011,51 +1826,35 @@ fn restore_registered_shortcuts(
     state: &State<AppState>,
     previous: RegisteredShortcuts,
 ) -> RegisteredShortcuts {
-    #[cfg(target_os = "macos")]
-    {
-        let _ = app;
-        let _ = state;
-        previous
-    }
+    let mut restored = RegisteredShortcuts::default();
 
-    #[cfg(not(target_os = "macos"))]
-    {
-        let mut restored = RegisteredShortcuts::default();
-
-        for binding in previous.hold {
-            match binding.global() {
-                Some(shortcut) => match app.global_shortcut().register(shortcut) {
-                    Ok(()) => restored.hold.push(binding),
-                    Err(error) => debug_log_state(
-                        state,
-                        format!(
-                            "shortcut_restore_failed mode=hold shortcut={} error={}",
-                            shortcut, error
-                        ),
-                    ),
-                },
-                None => restored.hold.push(binding),
+    for binding in previous.hold {
+        if let Some(shortcut) = binding.global() {
+            match app.global_shortcut().register(shortcut) {
+                Ok(()) => restored.hold.push(binding),
+                Err(error) => debug_log_state(
+                    state,
+                    format!("shortcut_restore_failed mode=hold shortcut={shortcut} error={error}"),
+                ),
             }
         }
+    }
 
-        for binding in previous.toggle {
-            match binding.global() {
-                Some(shortcut) => match app.global_shortcut().register(shortcut) {
-                    Ok(()) => restored.toggle.push(binding),
-                    Err(error) => debug_log_state(
-                        state,
-                        format!(
-                            "shortcut_restore_failed mode=toggle shortcut={} error={}",
-                            shortcut, error
-                        ),
+    for binding in previous.toggle {
+        if let Some(shortcut) = binding.global() {
+            match app.global_shortcut().register(shortcut) {
+                Ok(()) => restored.toggle.push(binding),
+                Err(error) => debug_log_state(
+                    state,
+                    format!(
+                        "shortcut_restore_failed mode=toggle shortcut={shortcut} error={error}"
                     ),
-                },
-                None => restored.toggle.push(binding),
+                ),
             }
         }
-
-        restored
     }
+
+    restored
 }
 
 fn registered_shortcut_matches(
@@ -2067,76 +1866,6 @@ fn registered_shortcut_matches(
         .copied()
         .filter_map(RegisteredShortcutBinding::global)
         .any(|registered| registered == *shortcut)
-}
-
-#[cfg(target_os = "macos")]
-fn bindings_for_action(
-    shortcuts: &RegisteredShortcuts,
-    action: ShortcutAction,
-) -> &[RegisteredShortcutBinding] {
-    match action {
-        ShortcutAction::Hold => &shortcuts.hold,
-        ShortcutAction::Toggle => &shortcuts.toggle,
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn fn_combo_exists(shortcuts: &RegisteredShortcuts) -> bool {
-    [ShortcutAction::Hold, ShortcutAction::Toggle]
-        .into_iter()
-        .flat_map(|action| bindings_for_action(shortcuts, action).iter().copied())
-        .filter_map(|binding| binding.mac_fn())
-        .any(|binding| !binding.fn_only())
-}
-
-#[cfg(target_os = "macos")]
-fn has_fn_only_binding(shortcuts: &RegisteredShortcuts, action: ShortcutAction) -> bool {
-    bindings_for_action(shortcuts, action)
-        .iter()
-        .copied()
-        .filter_map(|binding| binding.mac_fn())
-        .any(|binding| binding.fn_only())
-}
-
-#[cfg(target_os = "macos")]
-fn has_mac_fn_binding(shortcuts: &RegisteredShortcuts, action: ShortcutAction) -> bool {
-    bindings_for_action(shortcuts, action)
-        .iter()
-        .copied()
-        .any(|binding| binding.mac_fn().is_some())
-}
-
-#[cfg(target_os = "macos")]
-fn action_matches_fn_combo(
-    shortcuts: &RegisteredShortcuts,
-    action: ShortcutAction,
-    keycode: i64,
-    flags: CGEventFlags,
-) -> bool {
-    bindings_for_action(shortcuts, action)
-        .iter()
-        .copied()
-        .filter_map(|binding| binding.mac_fn())
-        .any(|binding| mac_fn_combo_matches(binding, keycode, flags))
-}
-
-#[cfg(target_os = "macos")]
-fn action_matches_global_shortcut(
-    shortcuts: &RegisteredShortcuts,
-    action: ShortcutAction,
-    keycode: i64,
-    flags: CGEventFlags,
-) -> bool {
-    let modifiers = mac_standard_modifiers_from_flags(flags);
-    bindings_for_action(shortcuts, action)
-        .iter()
-        .copied()
-        .filter_map(|binding| binding.global())
-        .any(|shortcut| {
-            shortcut.mods == modifiers
-                && mac_keycode_for_code(shortcut.key)
-                    .is_some_and(|expected_keycode| expected_keycode == keycode)
-        })
 }
 
 fn parse_shortcut_bindings(
@@ -2155,20 +1884,11 @@ fn parse_shortcut_bindings(
 }
 
 fn unregister_registered_bindings(app: &AppHandle, bindings: &[ShortcutBindingRegistration]) {
-    #[cfg(target_os = "macos")]
+    for shortcut in bindings
+        .iter()
+        .filter_map(|binding| binding.binding.global())
     {
-        let _ = app;
-        let _ = bindings;
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        for shortcut in bindings
-            .iter()
-            .filter_map(|binding| binding.binding.global())
-        {
-            let _ = app.global_shortcut().unregister(shortcut);
-        }
+        let _ = app.global_shortcut().unregister(shortcut);
     }
 }
 
@@ -2177,7 +1897,7 @@ fn register_shortcuts_strict(
     state: &State<AppState>,
     hold_hotkeys: &[String],
     toggle_hotkeys: &[String],
-) -> Result<ShortcutRegistrationResult, ShortcutBindingError> {
+) -> Result<(), ShortcutBindingError> {
     let hold = parse_shortcut_bindings(state, hold_hotkeys, ShortcutAction::Hold)?;
     let toggle = parse_shortcut_bindings(state, toggle_hotkeys, ShortcutAction::Toggle)?;
     debug_log_state(
@@ -2248,10 +1968,7 @@ fn register_shortcuts_strict(
             .collect(),
     };
 
-    Ok(ShortcutRegistrationResult {
-        hold: registered_hold,
-        toggle: registered_toggle,
-    })
+    Ok(())
 }
 
 fn recording_mode_from_settings(settings: &Settings) -> RecordingModeKind {
@@ -2294,68 +2011,6 @@ fn handle_shortcut_event(
         }
         _ => {}
     }
-}
-
-fn dispatch_shortcut_action(
-    app: &AppHandle,
-    state: &State<'_, AppState>,
-    action: ShortcutAction,
-    event_state: ShortcutState,
-) {
-    match action {
-        ShortcutAction::Hold => {
-            handle_shortcut_event(app, state, RecordingModeKind::Hold, event_state)
-        }
-        ShortcutAction::Toggle => {
-            handle_shortcut_event(app, state, RecordingModeKind::Toggle, event_state)
-        }
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn cancel_pending_mac_fn_press(state: &State<'_, AppState>) {
-    state.mac_fn_pending_sequence.fetch_add(1, Ordering::SeqCst);
-}
-
-#[cfg(target_os = "macos")]
-fn schedule_pending_mac_fn_press(app: &AppHandle, action: ShortcutAction) {
-    let app_handle = app.clone();
-    let state: State<AppState> = app_handle.state();
-    let sequence = state.mac_fn_pending_sequence.fetch_add(1, Ordering::SeqCst) + 1;
-
-    thread::spawn(move || {
-        thread::sleep(Duration::from_millis(MAC_FN_DISAMBIGUATION_DELAY_MS));
-        let state: State<AppState> = app_handle.state();
-        if state.mac_fn_pending_sequence.load(Ordering::SeqCst) != sequence {
-            return;
-        }
-        let fn_down = state
-            .mac_fn_key_down
-            .lock()
-            .map(|lock| *lock)
-            .unwrap_or(false);
-        if !fn_down {
-            return;
-        }
-        let shortcuts = state
-            .current_shortcuts
-            .lock()
-            .map(|lock| lock.clone())
-            .unwrap_or_default();
-        let Some(binding) = bindings_for_action(&shortcuts, action)
-            .iter()
-            .copied()
-            .filter_map(|binding| binding.mac_fn())
-            .find(|binding| binding.fn_only())
-        else {
-            return;
-        };
-        if !binding.fn_only() || !fn_combo_exists(&shortcuts) {
-            return;
-        }
-
-        dispatch_shortcut_action(&app_handle, &state, action, ShortcutState::Pressed);
-    });
 }
 
 fn toggle_recording_inner(app: &AppHandle, state: &State<AppState>) -> Result<(), String> {
@@ -3381,23 +3036,7 @@ fn applescript_escape(input: &str) -> String {
 #[cfg(target_os = "macos")]
 type CGEventRef = *const std::ffi::c_void;
 #[cfg(target_os = "macos")]
-type CGEventTapProxy = *const std::ffi::c_void;
-#[cfg(target_os = "macos")]
 type CGEventFlags = u64;
-#[cfg(target_os = "macos")]
-type CGEventMask = u64;
-
-#[cfg(target_os = "macos")]
-#[repr(u32)]
-#[allow(dead_code)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum CGEventType {
-    KeyDown = 10,
-    KeyUp = 11,
-    FlagsChanged = 12,
-    TapDisabledByTimeout = 0xFFFF_FFFE,
-    TapDisabledByUserInput = 0xFFFF_FFFF,
-}
 
 #[cfg(target_os = "macos")]
 #[repr(u32)]
@@ -3405,42 +3044,8 @@ enum CGEventType {
 #[derive(Clone, Copy, Debug)]
 enum CGEventTapLocation {
     Hid = 0,
-    Session = 1,
-    AnnotatedSession = 2,
 }
 
-#[cfg(target_os = "macos")]
-#[repr(u32)]
-#[allow(dead_code)]
-#[derive(Clone, Copy, Debug)]
-enum CGEventTapPlacement {
-    HeadInsertEventTap = 0,
-    TailAppendEventTap = 1,
-}
-
-#[cfg(target_os = "macos")]
-#[repr(u32)]
-#[allow(dead_code)]
-#[derive(Clone, Copy, Debug)]
-enum CGEventTapOptions {
-    Default = 0,
-    ListenOnly = 1,
-}
-
-#[cfg(target_os = "macos")]
-#[repr(u32)]
-#[derive(Clone, Copy, Debug)]
-enum CGEventField {
-    KeyboardEventAutorepeat = 8,
-    KeyboardEventKeycode = 9,
-}
-
-#[cfg(target_os = "macos")]
-const CG_EVENT_FLAG_MASK_SHIFT: CGEventFlags = 0x0002_0000;
-#[cfg(target_os = "macos")]
-const CG_EVENT_FLAG_MASK_CONTROL: CGEventFlags = 0x0004_0000;
-#[cfg(target_os = "macos")]
-const CG_EVENT_FLAG_MASK_ALT: CGEventFlags = 0x0008_0000;
 #[cfg(target_os = "macos")]
 const CG_EVENT_FLAG_MASK_COMMAND: CGEventFlags = 0x0010_0000;
 
@@ -3455,550 +3060,6 @@ unsafe extern "C" {
     fn CGEventSetFlags(event: CGEventRef, flags: CGEventFlags);
     fn CGEventPost(tap: CGEventTapLocation, event: CGEventRef);
     fn CGEventPostToPid(pid: i32, event: CGEventRef);
-    fn CGEventTapCreate(
-        tap: CGEventTapLocation,
-        place: CGEventTapPlacement,
-        options: CGEventTapOptions,
-        events_of_interest: CGEventMask,
-        callback: unsafe extern "C" fn(
-            proxy: CGEventTapProxy,
-            etype: CGEventType,
-            event: CGEventRef,
-            user_info: *const std::ffi::c_void,
-        ) -> CGEventRef,
-        user_info: *const std::ffi::c_void,
-    ) -> CFMachPortRef;
-    fn CGEventTapEnable(tap: CFMachPortRef, enable: bool);
-    fn CGEventGetFlags(event: CGEventRef) -> CGEventFlags;
-    fn CGEventGetIntegerValueField(event: CGEventRef, field: CGEventField) -> i64;
-}
-
-#[cfg(target_os = "macos")]
-fn mac_standard_modifiers_from_flags(flags: CGEventFlags) -> Modifiers {
-    let mut modifiers = Modifiers::empty();
-    if flags & CG_EVENT_FLAG_MASK_SHIFT != 0 {
-        modifiers |= Modifiers::SHIFT;
-    }
-    if flags & CG_EVENT_FLAG_MASK_CONTROL != 0 {
-        modifiers |= Modifiers::CONTROL;
-    }
-    if flags & CG_EVENT_FLAG_MASK_ALT != 0 {
-        modifiers |= Modifiers::ALT;
-    }
-    if flags & CG_EVENT_FLAG_MASK_COMMAND != 0 {
-        modifiers |= Modifiers::SUPER;
-    }
-    modifiers
-}
-
-#[cfg(target_os = "macos")]
-fn mac_keycode_for_code(code: Code) -> Option<i64> {
-    match code {
-        Code::KeyA => Some(0x00),
-        Code::KeyS => Some(0x01),
-        Code::KeyD => Some(0x02),
-        Code::KeyF => Some(0x03),
-        Code::KeyH => Some(0x04),
-        Code::KeyG => Some(0x05),
-        Code::KeyZ => Some(0x06),
-        Code::KeyX => Some(0x07),
-        Code::KeyC => Some(0x08),
-        Code::KeyV => Some(0x09),
-        Code::KeyB => Some(0x0b),
-        Code::KeyQ => Some(0x0c),
-        Code::KeyW => Some(0x0d),
-        Code::KeyE => Some(0x0e),
-        Code::KeyR => Some(0x0f),
-        Code::KeyY => Some(0x10),
-        Code::KeyT => Some(0x11),
-        Code::Digit1 => Some(0x12),
-        Code::Digit2 => Some(0x13),
-        Code::Digit3 => Some(0x14),
-        Code::Digit4 => Some(0x15),
-        Code::Digit6 => Some(0x16),
-        Code::Digit5 => Some(0x17),
-        Code::Equal => Some(0x18),
-        Code::Digit9 => Some(0x19),
-        Code::Digit7 => Some(0x1a),
-        Code::Minus => Some(0x1b),
-        Code::Digit8 => Some(0x1c),
-        Code::Digit0 => Some(0x1d),
-        Code::BracketRight => Some(0x1e),
-        Code::KeyO => Some(0x1f),
-        Code::KeyU => Some(0x20),
-        Code::BracketLeft => Some(0x21),
-        Code::KeyI => Some(0x22),
-        Code::KeyP => Some(0x23),
-        Code::Enter => Some(0x24),
-        Code::KeyL => Some(0x25),
-        Code::KeyJ => Some(0x26),
-        Code::Quote => Some(0x27),
-        Code::KeyK => Some(0x28),
-        Code::Semicolon => Some(0x29),
-        Code::Backslash => Some(0x2a),
-        Code::Comma => Some(0x2b),
-        Code::Slash => Some(0x2c),
-        Code::KeyN => Some(0x2d),
-        Code::KeyM => Some(0x2e),
-        Code::Period => Some(0x2f),
-        Code::Tab => Some(0x30),
-        Code::Space => Some(0x31),
-        Code::Backquote => Some(0x32),
-        Code::Backspace => Some(0x33),
-        Code::Escape => Some(0x35),
-        Code::CapsLock => Some(0x39),
-        Code::F17 => Some(0x40),
-        Code::NumpadDecimal => Some(0x41),
-        Code::NumpadMultiply => Some(0x43),
-        Code::PrintScreen => Some(0x46),
-        Code::NumpadAdd => Some(0x45),
-        Code::NumLock => Some(0x47),
-        Code::AudioVolumeUp => Some(0x48),
-        Code::AudioVolumeDown => Some(0x49),
-        Code::AudioVolumeMute => Some(0x4a),
-        Code::NumpadDivide => Some(0x4b),
-        Code::NumpadEnter => Some(0x4c),
-        Code::NumpadSubtract => Some(0x4e),
-        Code::F18 => Some(0x4f),
-        Code::F19 => Some(0x50),
-        Code::NumpadEqual => Some(0x51),
-        Code::Numpad0 => Some(0x52),
-        Code::Numpad1 => Some(0x53),
-        Code::Numpad2 => Some(0x54),
-        Code::Numpad3 => Some(0x55),
-        Code::Numpad4 => Some(0x56),
-        Code::Numpad5 => Some(0x57),
-        Code::Numpad6 => Some(0x58),
-        Code::Numpad7 => Some(0x59),
-        Code::F20 => Some(0x5a),
-        Code::Numpad8 => Some(0x5b),
-        Code::Numpad9 => Some(0x5c),
-        Code::F5 => Some(0x60),
-        Code::F6 => Some(0x61),
-        Code::F7 => Some(0x62),
-        Code::F3 => Some(0x63),
-        Code::F8 => Some(0x64),
-        Code::F9 => Some(0x65),
-        Code::F11 => Some(0x67),
-        Code::F13 => Some(0x69),
-        Code::F16 => Some(0x6a),
-        Code::F14 => Some(0x6b),
-        Code::F10 => Some(0x6d),
-        Code::F12 => Some(0x6f),
-        Code::F15 => Some(0x71),
-        Code::Insert => Some(0x72),
-        Code::Home => Some(0x73),
-        Code::PageUp => Some(0x74),
-        Code::Delete => Some(0x75),
-        Code::F4 => Some(0x76),
-        Code::End => Some(0x77),
-        Code::F2 => Some(0x78),
-        Code::PageDown => Some(0x79),
-        Code::F1 => Some(0x7a),
-        Code::ArrowLeft => Some(0x7b),
-        Code::ArrowRight => Some(0x7c),
-        Code::ArrowDown => Some(0x7d),
-        Code::ArrowUp => Some(0x7e),
-        _ => None,
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn mac_fn_combo_matches(binding: MacFnShortcut, keycode: i64, flags: CGEventFlags) -> bool {
-    let Some(base) = binding.base else {
-        return false;
-    };
-    mac_keycode_for_code(base.key).is_some_and(|expected| expected == keycode)
-        && mac_standard_modifiers_from_flags(flags) == base.mods
-}
-
-#[cfg(target_os = "macos")]
-fn mac_capture_token_for_keycode(keycode: i64) -> Option<&'static str> {
-    match keycode {
-        0x00 => Some("A"),
-        0x0b => Some("B"),
-        0x08 => Some("C"),
-        0x02 => Some("D"),
-        0x0e => Some("E"),
-        0x03 => Some("F"),
-        0x05 => Some("G"),
-        0x04 => Some("H"),
-        0x22 => Some("I"),
-        0x26 => Some("J"),
-        0x28 => Some("K"),
-        0x25 => Some("L"),
-        0x2e => Some("M"),
-        0x2d => Some("N"),
-        0x1f => Some("O"),
-        0x23 => Some("P"),
-        0x0c => Some("Q"),
-        0x0f => Some("R"),
-        0x01 => Some("S"),
-        0x11 => Some("T"),
-        0x20 => Some("U"),
-        0x09 => Some("V"),
-        0x0d => Some("W"),
-        0x07 => Some("X"),
-        0x10 => Some("Y"),
-        0x06 => Some("Z"),
-        0x1d => Some("0"),
-        0x12 => Some("1"),
-        0x13 => Some("2"),
-        0x14 => Some("3"),
-        0x15 => Some("4"),
-        0x17 => Some("5"),
-        0x16 => Some("6"),
-        0x1a => Some("7"),
-        0x1c => Some("8"),
-        0x19 => Some("9"),
-        0x7a => Some("F1"),
-        0x78 => Some("F2"),
-        0x63 => Some("F3"),
-        0x76 => Some("F4"),
-        0x60 => Some("F5"),
-        0x61 => Some("F6"),
-        0x62 => Some("F7"),
-        0x64 => Some("F8"),
-        0x65 => Some("F9"),
-        0x6d => Some("F10"),
-        0x67 => Some("F11"),
-        0x6f => Some("F12"),
-        0x69 => Some("F13"),
-        0x6b => Some("F14"),
-        0x71 => Some("F15"),
-        0x6a => Some("F16"),
-        0x40 => Some("F17"),
-        0x4f => Some("F18"),
-        0x50 => Some("F19"),
-        0x5a => Some("F20"),
-        0x75 => Some("Delete"),
-        0x33 => Some("Backspace"),
-        0x24 => Some("Enter"),
-        0x35 => Some("Escape"),
-        0x73 => Some("Home"),
-        0x72 => Some("Insert"),
-        0x77 => Some("End"),
-        0x74 => Some("PageUp"),
-        0x79 => Some("PageDown"),
-        0x7b => Some("Left"),
-        0x7c => Some("Right"),
-        0x7d => Some("Down"),
-        0x7e => Some("Up"),
-        0x30 => Some("Tab"),
-        0x31 => Some("Space"),
-        0x18 => Some("="),
-        0x1b => Some("-"),
-        0x27 => Some("'"),
-        0x29 => Some(";"),
-        0x2c => Some("/"),
-        0x2b => Some(","),
-        0x2f => Some("."),
-        0x21 => Some("["),
-        0x1e => Some("]"),
-        0x2a => Some("\\"),
-        0x32 => Some("`"),
-        0x41 => Some("NumDecimal"),
-        0x43 => Some("NumMultiply"),
-        0x45 => Some("NumAdd"),
-        0x4b => Some("NumDivide"),
-        0x4c => Some("NumEnter"),
-        0x4e => Some("NumSubtract"),
-        0x51 => Some("NumEqual"),
-        0x52 => Some("Num0"),
-        0x53 => Some("Num1"),
-        0x54 => Some("Num2"),
-        0x55 => Some("Num3"),
-        0x56 => Some("Num4"),
-        0x57 => Some("Num5"),
-        0x58 => Some("Num6"),
-        0x59 => Some("Num7"),
-        0x5b => Some("Num8"),
-        0x5c => Some("Num9"),
-        _ => None,
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn build_mac_fn_capture_candidate(keycode: i64, flags: CGEventFlags) -> Option<String> {
-    let key = mac_capture_token_for_keycode(keycode)?;
-    let modifiers = mac_standard_modifiers_from_flags(flags);
-    let mut parts = vec![MAC_FN_HOTKEY.to_string()];
-    if modifiers.contains(Modifiers::SUPER) {
-        parts.push("Cmd".to_string());
-    }
-    if modifiers.contains(Modifiers::CONTROL) {
-        parts.push("Ctrl".to_string());
-    }
-    if modifiers.contains(Modifiers::ALT) {
-        parts.push("Alt".to_string());
-    }
-    if modifiers.contains(Modifiers::SHIFT) {
-        parts.push("Shift".to_string());
-    }
-    parts.push(key.to_string());
-    Some(parts.join("+"))
-}
-
-#[cfg(target_os = "macos")]
-unsafe extern "C" fn mac_shortcut_event_callback(
-    _proxy: CGEventTapProxy,
-    event_type: CGEventType,
-    event: CGEventRef,
-    user_info: *const std::ffi::c_void,
-) -> CGEventRef {
-    if event.is_null() || user_info.is_null() {
-        return event;
-    }
-
-    if matches!(
-        event_type,
-        CGEventType::TapDisabledByTimeout | CGEventType::TapDisabledByUserInput
-    ) {
-        return event;
-    }
-
-    let keycode = unsafe { CGEventGetIntegerValueField(event, CGEventField::KeyboardEventKeycode) };
-    let context = unsafe { &*(user_info as *const MacShortcutMonitorContext) };
-    let state = context.app_handle.state::<AppState>();
-    let flags = unsafe { CGEventGetFlags(event) };
-    let fn_pressed = flags & NX_SECONDARYFNMASK != 0;
-
-    let capture_active = state
-        .native_hotkey_capture_active
-        .lock()
-        .map(|lock| *lock)
-        .unwrap_or(false);
-    let shortcuts = state
-        .current_shortcuts
-        .lock()
-        .map(|lock| lock.clone())
-        .unwrap_or_default();
-
-    match event_type {
-        CGEventType::FlagsChanged if keycode == MAC_FN_KEYCODE => {
-            let mut key_down = match state.mac_fn_key_down.lock() {
-                Ok(lock) => lock,
-                Err(_) => return event,
-            };
-            if *key_down == fn_pressed {
-                return event;
-            }
-            *key_down = fn_pressed;
-            drop(key_down);
-
-            if capture_active {
-                if fn_pressed {
-                    if let Ok(mut saw_non_fn_key) =
-                        state.native_hotkey_capture_saw_non_fn_key.lock()
-                    {
-                        *saw_non_fn_key = false;
-                    }
-                }
-                let _ = context
-                    .app_handle
-                    .emit(NATIVE_HOTKEY_FN_STATE_EVENT, fn_pressed);
-                if !fn_pressed {
-                    let saw_non_fn_key = state
-                        .native_hotkey_capture_saw_non_fn_key
-                        .lock()
-                        .map(|lock| *lock)
-                        .unwrap_or(false);
-                    if !saw_non_fn_key {
-                        let _ = context
-                            .app_handle
-                            .emit(NATIVE_HOTKEY_CAPTURE_EVENT, MAC_FN_HOTKEY.to_string());
-                    }
-                }
-                return event;
-            }
-
-            if fn_pressed {
-                if fn_combo_exists(&shortcuts) {
-                    for action in [ShortcutAction::Hold, ShortcutAction::Toggle] {
-                        if has_fn_only_binding(&shortcuts, action) {
-                            schedule_pending_mac_fn_press(&context.app_handle, action);
-                            break;
-                        }
-                    }
-                } else {
-                    for action in [ShortcutAction::Hold, ShortcutAction::Toggle] {
-                        if has_fn_only_binding(&shortcuts, action) {
-                            dispatch_shortcut_action(
-                                &context.app_handle,
-                                &state,
-                                action,
-                                ShortcutState::Pressed,
-                            );
-                            return std::ptr::null();
-                        }
-                    }
-                }
-            } else {
-                cancel_pending_mac_fn_press(&state);
-                if has_mac_fn_binding(&shortcuts, ShortcutAction::Hold) {
-                    dispatch_shortcut_action(
-                        &context.app_handle,
-                        &state,
-                        ShortcutAction::Hold,
-                        ShortcutState::Released,
-                    );
-                    if has_fn_only_binding(&shortcuts, ShortcutAction::Hold) {
-                        return std::ptr::null();
-                    }
-                }
-            }
-        }
-        CGEventType::KeyDown | CGEventType::KeyUp if keycode != MAC_FN_KEYCODE => {
-            let is_repeat = event_type == CGEventType::KeyDown
-                && unsafe {
-                    CGEventGetIntegerValueField(event, CGEventField::KeyboardEventAutorepeat)
-                } != 0;
-
-            if capture_active && fn_pressed && event_type == CGEventType::KeyDown {
-                if !is_repeat {
-                    if let Ok(mut saw_non_fn_key) =
-                        state.native_hotkey_capture_saw_non_fn_key.lock()
-                    {
-                        *saw_non_fn_key = true;
-                    }
-                    if let Some(candidate) = build_mac_fn_capture_candidate(keycode, flags) {
-                        let _ = context
-                            .app_handle
-                            .emit(NATIVE_HOTKEY_CAPTURE_EVENT, candidate);
-                    }
-                }
-                return event;
-            }
-
-            let event_state = if event_type == CGEventType::KeyDown {
-                ShortcutState::Pressed
-            } else {
-                ShortcutState::Released
-            };
-
-            if !capture_active && !fn_pressed {
-                if action_matches_global_shortcut(&shortcuts, ShortcutAction::Hold, keycode, flags)
-                {
-                    if !is_repeat {
-                        debug_log_handle(
-                            &context.app_handle,
-                            format!(
-                                "mac_event_tap_shortcut_event action=hold state={event_state:?}"
-                            ),
-                        );
-                        dispatch_shortcut_action(
-                            &context.app_handle,
-                            &state,
-                            ShortcutAction::Hold,
-                            event_state,
-                        );
-                    }
-                    return std::ptr::null();
-                } else if action_matches_global_shortcut(
-                    &shortcuts,
-                    ShortcutAction::Toggle,
-                    keycode,
-                    flags,
-                ) {
-                    if event_type == CGEventType::KeyDown && !is_repeat {
-                        debug_log_handle(
-                            &context.app_handle,
-                            "mac_event_tap_shortcut_event action=toggle state=Pressed".to_string(),
-                        );
-                        dispatch_shortcut_action(
-                            &context.app_handle,
-                            &state,
-                            ShortcutAction::Toggle,
-                            ShortcutState::Pressed,
-                        );
-                    }
-                    return std::ptr::null();
-                }
-            }
-
-            if is_repeat {
-                return event;
-            }
-
-            if !fn_pressed {
-                return event;
-            }
-
-            cancel_pending_mac_fn_press(&state);
-
-            if action_matches_fn_combo(&shortcuts, ShortcutAction::Hold, keycode, flags) {
-                dispatch_shortcut_action(
-                    &context.app_handle,
-                    &state,
-                    ShortcutAction::Hold,
-                    event_state,
-                );
-                return std::ptr::null();
-            } else if action_matches_fn_combo(&shortcuts, ShortcutAction::Toggle, keycode, flags) {
-                if event_type == CGEventType::KeyDown {
-                    dispatch_shortcut_action(
-                        &context.app_handle,
-                        &state,
-                        ShortcutAction::Toggle,
-                        ShortcutState::Pressed,
-                    );
-                }
-                return std::ptr::null();
-            }
-        }
-        _ => {}
-    }
-
-    event
-}
-
-#[cfg(target_os = "macos")]
-fn ensure_mac_shortcut_event_tap(state: &State<AppState>) -> Result<(), String> {
-    let mut started = state
-        .mac_shortcut_event_tap_started
-        .lock()
-        .map_err(|_| "Failed to lock shortcut capture state".to_string())?;
-    if *started {
-        return Ok(());
-    }
-
-    let event_mask = (1u64 << (CGEventType::FlagsChanged as u32))
-        | (1u64 << (CGEventType::KeyDown as u32))
-        | (1u64 << (CGEventType::KeyUp as u32));
-    let user_info = Arc::as_ptr(&state.mac_shortcut_monitor_context) as *const std::ffi::c_void;
-
-    unsafe {
-        let tap = CGEventTapCreate(
-            CGEventTapLocation::Session,
-            CGEventTapPlacement::HeadInsertEventTap,
-            CGEventTapOptions::Default,
-            event_mask,
-            mac_shortcut_event_callback,
-            user_info,
-        );
-        if tap.is_null() {
-            return Err(
-                format!(
-                    "Shortcut capture needs Accessibility access on macOS. Open Settings > Access and enable {}, then try again.",
-                    app_display_name()
-                ),
-            );
-        }
-
-        let loop_source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0);
-        if loop_source.is_null() {
-            CFMachPortInvalidate(tap);
-            CFRelease(tap as CFTypeRef);
-            return Err("Failed to start shortcut monitoring.".to_string());
-        }
-
-        CFRunLoopAddSource(CFRunLoopGetMain(), loop_source, kCFRunLoopCommonModes);
-        CGEventTapEnable(tap, true);
-    }
-
-    *started = true;
-    debug_log_state(state, "mac_shortcut_event_tap_started".to_string());
-    Ok(())
 }
 
 #[cfg(target_os = "macos")]
@@ -4020,7 +3081,6 @@ const K_AX_VALUE_CF_RANGE_TYPE: AXValueType = 4;
 #[cfg(target_os = "macos")]
 #[link(name = "ApplicationServices", kind = "framework")]
 unsafe extern "C" {
-    fn AXIsProcessTrusted() -> Boolean;
     fn AXUIElementCreateSystemWide() -> AXUIElementRef;
     fn AXUIElementCreateApplication(pid: i32) -> AXUIElementRef;
     fn AXUIElementCopyAttributeValue(
@@ -4685,20 +3745,6 @@ fn main() {
                 }),
                 recorder: Mutex::new(None),
                 current_shortcuts: Mutex::new(RegisteredShortcuts::default()),
-                #[cfg(target_os = "macos")]
-                mac_shortcut_monitor_context: Arc::new(MacShortcutMonitorContext {
-                    app_handle: app.handle().clone(),
-                }),
-                #[cfg(target_os = "macos")]
-                mac_shortcut_event_tap_started: Mutex::new(false),
-                #[cfg(target_os = "macos")]
-                native_hotkey_capture_active: Mutex::new(false),
-                #[cfg(target_os = "macos")]
-                native_hotkey_capture_saw_non_fn_key: Mutex::new(false),
-                #[cfg(target_os = "macos")]
-                mac_fn_key_down: Mutex::new(false),
-                #[cfg(target_os = "macos")]
-                mac_fn_pending_sequence: AtomicU64::new(0),
                 http_client,
                 transcript_history: Mutex::new(transcript_history),
                 durable_draft: Mutex::new(durable_draft),
@@ -4713,20 +3759,11 @@ fn main() {
                 &settings.hold_hotkeys,
                 &settings.toggle_hotkeys,
             ) {
-                Ok(registration) => debug_log_state(
+                Ok(()) => debug_log_state(
                     &app_state,
                     format!(
                         "startup_shortcuts hold={:?} toggle={:?}",
-                        registration
-                            .hold
-                            .iter()
-                            .map(|binding| binding.requested_hotkey.as_str())
-                            .collect::<Vec<_>>(),
-                        registration
-                            .toggle
-                            .iter()
-                            .map(|binding| binding.requested_hotkey.as_str())
-                            .collect::<Vec<_>>()
+                        settings.hold_hotkeys, settings.toggle_hotkeys
                     ),
                 ),
                 Err(error) => {
@@ -4799,11 +3836,13 @@ fn main() {
             get_durable_draft,
             clear_durable_draft,
             copy_text_to_clipboard,
-            set_native_hotkey_capture,
+            set_hotkey_capture_mode,
             toggle_recording,
             test_api_connection,
             check_accessibility_permission,
+            request_accessibility_permission,
             open_accessibility_settings,
+            reset_accessibility_permission,
             check_microphone_permission,
             request_microphone_permission,
             open_microphone_settings

@@ -149,8 +149,6 @@ const NON_MODIFIER_ALIAS_TO_CANONICAL: Record<string, string> = {
   slash: '/',
   space: 'Space',
   spacebar: 'Space',
-  fn: 'Fn',
-  function: 'Fn',
   esc: 'Escape',
   return: 'Enter',
   tab: 'Tab',
@@ -160,8 +158,6 @@ const NON_MODIFIER_ALIAS_TO_CANONICAL: Record<string, string> = {
 
 const KNOWN_MODIFIERS = new Set(['Cmd', 'Ctrl', 'Alt', 'Shift', 'Super']);
 const MODIFIER_EVENT_KEYS = new Set(['Meta', 'Control', 'Alt', 'Shift', 'AltGraph']);
-const NATIVE_HOTKEY_CAPTURE_EVENT = 'native-hotkey-captured';
-const NATIVE_HOTKEY_FN_STATE_EVENT = 'native-hotkey-fn-state';
 const HOME_RECENT_LIMIT = 8;
 const ESTIMATED_TYPING_WPM = 40;
 const ESTIMATED_DICTATION_WPM = 130;
@@ -202,13 +198,11 @@ const draftRestoreDismissBtn = document.querySelector<HTMLButtonElement>('#draft
 const testApiBtn = document.querySelector<HTMLButtonElement>('#test-api-btn')!;
 const checkAccessibilityBtn = document.querySelector<HTMLButtonElement>('#check-accessibility-btn')!;
 const openAccessibilitySettingsBtn = document.querySelector<HTMLButtonElement>('#open-accessibility-settings-btn')!;
+const resetAccessibilityPermissionBtn = document.querySelector<HTMLButtonElement>(
+  '#reset-accessibility-permission-btn'
+)!;
 const checkMicrophoneBtn = document.querySelector<HTMLButtonElement>('#check-microphone-btn')!;
 const openMicrophoneSettingsBtn = document.querySelector<HTMLButtonElement>('#open-microphone-settings-btn')!;
-const accessibilityModalEl = document.querySelector<HTMLDivElement>('#accessibility-modal')!;
-const accessibilityModalOpenSettingsBtn = document.querySelector<HTMLButtonElement>(
-  '#accessibility-modal-open-settings-btn'
-)!;
-const accessibilityModalLaterBtn = document.querySelector<HTMLButtonElement>('#accessibility-modal-later-btn')!;
 const apiKeyInput = document.querySelector<HTMLInputElement>('#apiKey')!;
 const promptTemplateInput = document.querySelector<HTMLTextAreaElement>('#promptTemplate')!;
 const whisperModelInput = document.querySelector<HTMLInputElement>('#whisperModel')!;
@@ -274,13 +268,12 @@ const onboardingHotkeyInput = document.querySelector<HTMLInputElement>('#onboard
 const onboardingHotkeyCaptureBtn = document.querySelector<HTMLButtonElement>('#onboarding-hotkey-capture-btn')!;
 const onboardingHotkeyValidationEl = document.querySelector<HTMLParagraphElement>('#onboarding-hotkey-validation')!;
 const onboardingLanguageInput = document.querySelector<HTMLSelectElement>('#onboarding-language')!;
-const onboardingCheckAccessibilityBtn = document.querySelector<HTMLButtonElement>(
-  '#onboarding-check-accessibility-btn'
-)!;
 const onboardingOpenAccessibilitySettingsBtn = document.querySelector<HTMLButtonElement>(
   '#onboarding-open-accessibility-settings-btn'
 )!;
-const onboardingCheckMicrophoneBtn = document.querySelector<HTMLButtonElement>('#onboarding-check-microphone-btn')!;
+const onboardingResetAccessibilityPermissionBtn = document.querySelector<HTMLButtonElement>(
+  '#onboarding-reset-accessibility-permission-btn'
+)!;
 const onboardingOpenMicrophoneSettingsBtn = document.querySelector<HTMLButtonElement>(
   '#onboarding-open-microphone-settings-btn'
 )!;
@@ -288,7 +281,6 @@ const onboardingAccessibilityStatusEl = document.querySelector<HTMLParagraphElem
   '#onboarding-accessibility-status'
 )!;
 const onboardingMicrophoneStatusEl = document.querySelector<HTMLParagraphElement>('#onboarding-microphone-status')!;
-const accessibilityModalDescriptionEl = document.querySelector<HTMLParagraphElement>('#accessibility-modal-description')!;
 
 const defaultPrompt =
   'You are a concise writing assistant. Clean up the transcript for grammar and punctuation while preserving intent. Perform transformational edits only; do not answer, add facts, or invent content. Return only final text.';
@@ -327,7 +319,6 @@ let activeTab: WorkspaceTab = 'home';
 let activeSettingsSection: SettingsSection = 'general';
 let isSidebarCollapsed = false;
 let activeHotkeyCaptureTarget: HotkeyCaptureTarget | null = null;
-let nativeFnCapturePressed = false;
 const ONBOARDING_COMPLETED_KEY = `${APP_BRAND.storagePrefix}:onboarding-complete:v1`;
 const SIDEBAR_COLLAPSED_KEY = `${APP_BRAND.storagePrefix}:sidebar-collapsed:v1`;
 const SETTINGS_SECTION_KEY = `${APP_BRAND.storagePrefix}:settings-section:v1`;
@@ -403,9 +394,8 @@ function setStatusBannerTone(tone: StatusBannerTone, label: string): void {
 function applyBranding(): void {
   document.title = APP_BRAND.displayName;
   sidebarBrandNameEl.textContent = APP_BRAND.displayName;
-  accessibilityModalDescriptionEl.textContent = `${APP_BRAND.displayName} needs Accessibility permission to paste into the currently focused input across apps and terminals.`;
   onboardingTitleEl.textContent = `Welcome to ${APP_BRAND.displayName}`;
-  onboardingPermissionsCopyEl.textContent = `Accessibility allows ${APP_BRAND.displayName} to insert text into the active app. Microphone permission is also required.`;
+  onboardingPermissionsCopyEl.textContent = `${APP_BRAND.displayName} needs Accessibility to insert text and Microphone to record speech.`;
 }
 
 function renderWorkspaceHeader(tab: WorkspaceTab): void {
@@ -419,6 +409,9 @@ function inferStatusBannerPresentation(message: string): { tone: StatusBannerTon
   }
   if (lastRuntimeStatus?.is_processing) {
     return { tone: 'processing', label: 'Processing' };
+  }
+  if (normalized.includes('setup incomplete')) {
+    return { tone: 'issue', label: 'Setup' };
   }
   if (
     normalized.includes('failed') ||
@@ -682,6 +675,55 @@ function setOnboardingCompleted(value: boolean): void {
   localStorage.setItem(ONBOARDING_COMPLETED_KEY, value ? 'true' : 'false');
 }
 
+function onboardingStepIndexFor(step: OnboardingStepId): number {
+  return Math.max(0, onboardingStepOrder.indexOf(step));
+}
+
+function missingPermissionLabels(): string[] {
+  const missing = [];
+  if (lastAccessibilityStatus?.is_supported && !lastAccessibilityStatus.is_granted) {
+    missing.push('Accessibility');
+  }
+  if (lastMicrophoneStatus?.is_supported && !lastMicrophoneStatus.is_granted) {
+    missing.push('Microphone');
+  }
+  return missing;
+}
+
+function setStatusBannerActionable(actionable: boolean): void {
+  statusBannerEl.classList.toggle('is-actionable', actionable);
+  statusBannerEl.dataset.action = actionable ? 'setup' : '';
+  statusBannerEl.tabIndex = actionable ? 0 : -1;
+  if (actionable) {
+    statusBannerEl.setAttribute('aria-label', 'Open setup');
+  } else {
+    statusBannerEl.removeAttribute('aria-label');
+  }
+}
+
+function syncPermissionSetupBanner(): void {
+  const missing = missingPermissionLabels();
+  const wasSetupAction = statusBannerEl.dataset.action === 'setup';
+
+  if (missing.length > 0 && !lastRuntimeStatus?.is_recording && !lastRuntimeStatus?.is_processing) {
+    statusEl.textContent = `Setup incomplete: ${missing.join(' + ')}`;
+    setStatusBannerTone('issue', 'Setup');
+    setStatusBannerActionable(true);
+    return;
+  }
+
+  setStatusBannerActionable(false);
+  if (wasSetupAction && statusEl.textContent?.trim().startsWith('Setup incomplete')) {
+    const restored = lastRuntimeStatus?.last_message?.trim() || 'Ready';
+    statusEl.textContent = restored;
+    setStatusBannerTone(inferStatusBannerPresentation(restored).tone, inferStatusBannerPresentation(restored).label);
+  }
+}
+
+function showPermissionOnboarding(): void {
+  showOnboarding({ resetStep: false, step: 'permissions' });
+}
+
 function syncOnboardingInputsFromSettings(): void {
   onboardingApiKeyInput.value = apiKeyInput.value.trim();
   onboardingApiBaseUrlInput.value = apiBaseUrlInput.value.trim() || 'https://api.openai.com/v1';
@@ -707,13 +749,20 @@ function updateOnboardingStep(): void {
   onboardingFinishBtn.classList.toggle('hidden', !isLast);
 }
 
-function showOnboarding(resetStep = true): void {
-  if (resetStep) onboardingStepIndex = 0;
+function showOnboarding(options: { resetStep?: boolean; step?: OnboardingStepId } = {}): void {
+  const resetStep = options.resetStep ?? true;
+  if (options.step) {
+    onboardingStepIndex = onboardingStepIndexFor(options.step);
+  } else if (resetStep) {
+    onboardingStepIndex = 0;
+  }
   syncOnboardingInputsFromSettings();
-  onboardingAccessibilityStatusEl.textContent = 'Not checked yet.';
-  onboardingMicrophoneStatusEl.textContent = 'Not checked yet.';
+  renderOnboardingPermissionStatuses();
   updateOnboardingStep();
   onboardingModalEl.classList.remove('hidden');
+  if (onboardingStepOrder[onboardingStepIndex] === 'permissions') {
+    void refreshPermissionStatuses();
+  }
 }
 
 function hideOnboarding(): void {
@@ -949,10 +998,9 @@ function normalizeHotkeyInput(input: string): string {
       return compactPart;
     });
 
-  const fnParts = normalizedParts.filter((part) => part === 'Fn');
   const modifierParts = normalizedParts.filter((part) => KNOWN_MODIFIERS.has(part));
-  const nonModifierParts = normalizedParts.filter((part) => part !== 'Fn' && !KNOWN_MODIFIERS.has(part));
-  return [...fnParts, ...modifierParts, ...nonModifierParts].join('+');
+  const nonModifierParts = normalizedParts.filter((part) => !KNOWN_MODIFIERS.has(part));
+  return [...modifierParts, ...nonModifierParts].join('+');
 }
 
 function validateHotkey(hotkey: string): string | null {
@@ -968,27 +1016,20 @@ function validateHotkey(hotkey: string): string | null {
 
   const normalized = normalizeHotkeyInput(trimmed);
   const parts = normalized.split('+').filter(Boolean);
-  const fnCount = parts.filter((part) => part === 'Fn').length;
   const modifiers = parts.filter((part) => KNOWN_MODIFIERS.has(part));
-  const nonModifiers = parts.filter((part) => part !== 'Fn' && !KNOWN_MODIFIERS.has(part));
+  const nonModifiers = parts.filter((part) => !KNOWN_MODIFIERS.has(part));
 
   const duplicateModifier = modifiers.find((modifier, index) => modifiers.indexOf(modifier) !== index);
   if (duplicateModifier) {
     return `Duplicate modifier "${duplicateModifier}". Use each modifier once.`;
   }
 
-  if (fnCount > 1) {
-    return 'Duplicate modifier "Fn". Use each modifier once.';
-  }
-
-  if (fnCount === 1 && nonModifiers.length === 0 && modifiers.length === 0) {
-    return PLATFORM_IS_MAC ? null : 'Fn shortcuts are only supported on macOS.';
+  if (parts.some((part) => part === 'Fn' || part.toLowerCase() === 'fn')) {
+    return 'Fn shortcuts are not supported. Use a function key or a shortcut with modifiers.';
   }
 
   if (nonModifiers.length === 0) {
-    return PLATFORM_IS_MAC
-      ? 'Modifier-only shortcuts are not supported here yet. Use one key with modifiers, a single F key, or Fn.'
-      : 'Modifier-only shortcuts are not supported here yet. Use one key with one or two modifiers, or use a single F key.';
+    return 'Modifier-only shortcuts are not supported here yet. Use one key with one or two modifiers, or use a single F key.';
   }
 
   if (nonModifiers.length > 1) {
@@ -996,33 +1037,21 @@ function validateHotkey(hotkey: string): string | null {
   }
 
   if (!canonicalizeNonModifierToken(nonModifiers[0])) {
-    return PLATFORM_IS_MAC
-      ? `Unsupported key "${nonModifiers[0]}". Use a real key like A, 1, Space, F8, or Fn.`
-      : `Unsupported key "${nonModifiers[0]}". Use a real key like A, 1, Space, or F8.`;
+    return `Unsupported key "${nonModifiers[0]}". Use a real key like A, 1, Space, or F8.`;
   }
 
   const primaryKey = nonModifiers[0];
   const isFunctionKey = /^F([1-9]|1[0-9]|2[0-4])$/.test(primaryKey);
-  const totalModifierCount = modifiers.length + fnCount;
+  const totalModifierCount = modifiers.length;
   if (isFunctionKey && totalModifierCount === 0) {
     return null;
   }
 
   if (totalModifierCount === 0) {
-    return PLATFORM_IS_MAC
-      ? 'Add at least one modifier key, or use a single F key or Fn.'
-      : 'Add at least one modifier key, or use a single F key.';
+    return 'Add at least one modifier key, or use a single F key.';
   }
 
-  if (fnCount === 1 && !PLATFORM_IS_MAC) {
-    return 'Fn shortcuts are only supported on macOS.';
-  }
-
-  if (fnCount === 1 && modifiers.length > 2) {
-    return 'Use Fn plus at most two other modifiers and one key.';
-  }
-
-  if (fnCount === 0 && modifiers.length > 2) {
+  if (modifiers.length > 2) {
     return 'Use at most two modifiers plus one key.';
   }
 
@@ -1031,16 +1060,11 @@ function validateHotkey(hotkey: string): string | null {
 
 function hotkeyHasNonModifier(hotkey: string): boolean {
   const parts = normalizeHotkeyInput(hotkey).split('+').filter(Boolean);
-  const fnCount = parts.filter((part) => part === 'Fn').length;
-  const nonModifiers = parts.filter((part) => part !== 'Fn' && !KNOWN_MODIFIERS.has(part));
-  return nonModifiers.length > 0 || (PLATFORM_IS_MAC && fnCount === 1 && parts.length === 1);
+  return parts.some((part) => !KNOWN_MODIFIERS.has(part));
 }
 
 function keyTokenFromCode(code: string): string | null {
   if (!code) return null;
-  if (code === 'Fn') {
-    return 'Fn';
-  }
   if (/^Key[A-Z]$/.test(code)) {
     return code.slice(3);
   }
@@ -1127,13 +1151,6 @@ function keyTokenFromCode(code: string): string | null {
 
 function hotkeyFromKeyboardEvent(event: KeyboardEvent): string {
   const parts: string[] = [];
-  const fnPressed =
-    PLATFORM_IS_MAC &&
-    (event.code === 'Fn' ||
-      event.key === 'Fn' ||
-      event.getModifierState?.('Fn') === true ||
-      nativeFnCapturePressed);
-  if (fnPressed) parts.push('Fn');
   if (event.metaKey) parts.push('Cmd');
   if (event.ctrlKey) parts.push('Ctrl');
   if (event.altKey) parts.push('Alt');
@@ -1329,6 +1346,7 @@ function renderStatus(status: RuntimeStatus): void {
   micLevelValueEl.textContent = status.is_recording ? `${level}%` : '0%';
   micLevelBarEl.style.width = `${status.is_recording ? level : 0}%`;
   settingsRuntimeStatusEl.textContent = state;
+  syncPermissionSetupBanner();
 }
 
 function setToggleButtonsDisabled(disabled: boolean): void {
@@ -1389,9 +1407,8 @@ function renderAccessibilityStatus(status: AccessibilityPermissionStatus): void 
       : 'Needs access'
     : 'Unsupported';
   setAccessibilityStatusSummary(label);
-  if (!status.is_supported || status.is_granted) {
-    hideAccessibilityModal();
-  }
+  renderOnboardingPermissionStatuses();
+  syncPermissionSetupBanner();
 }
 
 function renderMicrophoneStatus(status: MicrophonePermissionStatus): void {
@@ -1404,10 +1421,32 @@ function renderMicrophoneStatus(status: MicrophonePermissionStatus): void {
         : 'Needs access'
     : 'Unsupported';
   setMicrophoneStatusSummary(label);
+  renderOnboardingPermissionStatuses();
+  syncPermissionSetupBanner();
 }
 
-function hideAccessibilityModal(): void {
-  accessibilityModalEl.classList.add('hidden');
+function onboardingAccessibilityLabel(status: AccessibilityPermissionStatus | null): string {
+  if (!status) return 'Checking...';
+  if (!status.is_supported) return 'Unsupported on this platform.';
+  if (status.is_granted) return 'Enabled';
+  return 'Needs access. Turn Keylesss on in System Settings.';
+}
+
+function onboardingMicrophoneLabel(status: MicrophonePermissionStatus | null): string {
+  if (!status) return 'Checking...';
+  if (!status.is_supported) return 'Unsupported on this platform.';
+  if (status.is_granted) return 'Enabled';
+  if (status.status === 'not_determined') return 'Needs access. Click Allow Microphone.';
+  if (status.status === 'denied') return 'Needs access. Turn Keylesss on under Microphone.';
+  if (status.status === 'restricted') return 'Restricted by macOS.';
+  return 'Needs access';
+}
+
+function renderOnboardingPermissionStatuses(): void {
+  onboardingAccessibilityStatusEl.textContent = onboardingAccessibilityLabel(lastAccessibilityStatus);
+  onboardingMicrophoneStatusEl.textContent = onboardingMicrophoneLabel(lastMicrophoneStatus);
+  onboardingResetAccessibilityPermissionBtn.hidden =
+    !lastAccessibilityStatus || !lastAccessibilityStatus.is_supported || lastAccessibilityStatus.is_granted;
 }
 
 async function checkAndRenderAccessibilityStatus(): Promise<AccessibilityPermissionStatus> {
@@ -1422,14 +1461,53 @@ async function checkAndRenderMicrophoneStatus(): Promise<MicrophonePermissionSta
   return permissionStatus;
 }
 
+async function refreshPermissionStatuses(options: { requestAccessibility?: boolean; requestMicrophone?: boolean } = {}): Promise<{
+  accessibility: AccessibilityPermissionStatus;
+  microphone: MicrophonePermissionStatus;
+}> {
+  const [accessibility, microphone] = await Promise.all([
+    invoke<AccessibilityPermissionStatus>(
+      options.requestAccessibility ? 'request_accessibility_permission' : 'check_accessibility_permission'
+    ),
+    invoke<MicrophonePermissionStatus>(
+      options.requestMicrophone ? 'request_microphone_permission' : 'check_microphone_permission'
+    )
+  ]);
+
+  renderAccessibilityStatus(accessibility);
+  renderMicrophoneStatus(microphone);
+  return { accessibility, microphone };
+}
+
 async function openAccessibilitySettingsFromUi(button: HTMLButtonElement): Promise<void> {
   button.disabled = true;
   try {
+    const permissionStatus = await invoke<AccessibilityPermissionStatus>('request_accessibility_permission');
+    renderAccessibilityStatus(permissionStatus);
+    if (permissionStatus.is_granted) {
+      statusEl.textContent = 'Accessibility enabled.';
+      return;
+    }
+
     const message = await invoke<string>('open_accessibility_settings');
     statusEl.textContent = message;
-    setAccessibilityStatusSummary('Settings opened', true);
+    setAccessibilityStatusSummary('Settings opened');
+    syncPermissionSetupBanner();
   } catch (error) {
-    setAccessibilityStatusSummary('Open failed', true);
+    setAccessibilityStatusSummary('Open failed');
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function resetAccessibilityPermissionFromUi(button: HTMLButtonElement): Promise<void> {
+  button.disabled = true;
+  try {
+    const resetMessage = await invoke<string>('reset_accessibility_permission');
+    statusEl.textContent = resetMessage;
+    await openAccessibilitySettingsFromUi(button);
+  } catch (error) {
+    statusEl.textContent = `Reset failed: ${String(error)}`;
   } finally {
     button.disabled = false;
   }
@@ -1447,12 +1525,34 @@ async function openMicrophoneSettingsFromUi(button: HTMLButtonElement): Promise<
 
     const message = await invoke<string>('open_microphone_settings');
     statusEl.textContent = message;
-    setMicrophoneStatusSummary('Settings opened', true);
+    setMicrophoneStatusSummary('Settings opened');
+    syncPermissionSetupBanner();
   } catch (error) {
-    setMicrophoneStatusSummary('Open failed', true);
+    setMicrophoneStatusSummary('Open failed');
   } finally {
     button.disabled = false;
   }
+}
+
+async function ensureOnboardingPermissionsReady(): Promise<boolean> {
+  const { accessibility, microphone } = await refreshPermissionStatuses({
+    requestAccessibility: true,
+    requestMicrophone: true
+  });
+
+  const missing = [];
+  if (accessibility.is_supported && !accessibility.is_granted) missing.push('Accessibility');
+  if (microphone.is_supported && !microphone.is_granted) missing.push('Microphone');
+  if (missing.length === 0) return true;
+
+  statusEl.textContent = `Setup incomplete: ${missing.join(' + ')}`;
+  syncPermissionSetupBanner();
+  if (accessibility.is_supported && !accessibility.is_granted) {
+    await invoke<string>('open_accessibility_settings').catch(() => null);
+  } else if (microphone.is_supported && !microphone.is_granted && microphone.status !== 'not_determined') {
+    await invoke<string>('open_microphone_settings').catch(() => null);
+  }
+  return false;
 }
 
 function normalizeShortcutList(shortcuts: string[], slot: ShortcutSlot): string[] {
@@ -1625,9 +1725,8 @@ function setActiveHotkeyCaptureValidation(target: HotkeyCaptureTarget, message: 
   }
 }
 
-function syncNativeHotkeyCapture(active: boolean, target: HotkeyCaptureTarget): void {
-  if (!PLATFORM_IS_MAC) return;
-  void invoke<void>('set_native_hotkey_capture', { active }).catch((error) => {
+function syncHotkeyCaptureRegistration(active: boolean, target: HotkeyCaptureTarget): void {
+  void invoke<void>('set_hotkey_capture_mode', { active }).catch((error) => {
     if (!active || !sameCaptureTarget(activeHotkeyCaptureTarget, target)) return;
     setActiveHotkeyCaptureValidation(target, String(error), false);
   });
@@ -1665,8 +1764,7 @@ function commitCapturedHotkey(candidate: string): void {
 
 function stopHotkeyCapture(message?: string, isError = false): void {
   if (!activeHotkeyCaptureTarget) return;
-  nativeFnCapturePressed = false;
-  syncNativeHotkeyCapture(false, activeHotkeyCaptureTarget);
+  syncHotkeyCaptureRegistration(false, activeHotkeyCaptureTarget);
   if (activeHotkeyCaptureTarget.scope === 'settings') {
     shortcutAddBtns.hold.disabled = false;
     shortcutAddBtns.toggle.disabled = false;
@@ -1686,14 +1784,13 @@ function startHotkeyCapture(target: HotkeyCaptureTarget): void {
     stopHotkeyCapture();
   }
   activeHotkeyCaptureTarget = target;
-  nativeFnCapturePressed = false;
   if (target.scope === 'settings') {
     setSettingsHotkeyValidation(target.slot, '', false);
   } else {
     onboardingHotkeyCaptureBtn.disabled = false;
     setOnboardingHotkeyValidation('', false);
   }
-  syncNativeHotkeyCapture(true, target);
+  syncHotkeyCaptureRegistration(true, target);
   applyConfigUi({
     ...currentSettingsConfig()
   });
@@ -1708,15 +1805,6 @@ function setupHotkeyCapture(): void {
   });
   onboardingHotkeyCaptureBtn.addEventListener('click', () => {
     startHotkeyCapture({ scope: 'onboarding' });
-  });
-
-  void listen<string>(NATIVE_HOTKEY_CAPTURE_EVENT, (event) => {
-    if (!activeHotkeyCaptureTarget) return;
-    commitCapturedHotkey(event.payload);
-  });
-
-  void listen<boolean>(NATIVE_HOTKEY_FN_STATE_EVENT, (event) => {
-    nativeFnCapturePressed = Boolean(event.payload) && Boolean(activeHotkeyCaptureTarget);
   });
 
   window.addEventListener(
@@ -2238,23 +2326,20 @@ async function loadInitial(): Promise<void> {
   renderDurableDraft(draft);
   lastDebugLogLines = await invoke<string[]>('get_debug_log');
 
-  setAccessibilityStatusSummary('Checking...', true);
+  setAccessibilityStatusSummary('Checking...');
+  setMicrophoneStatusSummary('Checking...');
   try {
-    await checkAndRenderAccessibilityStatus();
+    await refreshPermissionStatuses();
   } catch (error) {
     setAccessibilityStatusSummary('Check failed', true);
-  }
-
-  setMicrophoneStatusSummary('Checking...', true);
-  try {
-    await checkAndRenderMicrophoneStatus();
-  } catch (error) {
     setMicrophoneStatusSummary('Check failed', true);
   }
 
-  if (!isOnboardingCompleted()) {
-    setActiveTab('settings');
-    showOnboarding();
+  const missingPermissions = missingPermissionLabels();
+  if (!isOnboardingCompleted() || missingPermissions.length > 0) {
+    showOnboarding({
+      step: missingPermissions.length > 0 ? 'permissions' : 'welcome'
+    });
   }
 }
 
@@ -2390,6 +2475,10 @@ openAccessibilitySettingsBtn.addEventListener('click', async () => {
   await openAccessibilitySettingsFromUi(openAccessibilitySettingsBtn);
 });
 
+resetAccessibilityPermissionBtn.addEventListener('click', async () => {
+  await resetAccessibilityPermissionFromUi(resetAccessibilityPermissionBtn);
+});
+
 checkMicrophoneBtn.addEventListener('click', async () => {
   checkMicrophoneBtn.disabled = true;
   setMicrophoneStatusSummary('Checking...', true);
@@ -2406,18 +2495,10 @@ openMicrophoneSettingsBtn.addEventListener('click', async () => {
   await openMicrophoneSettingsFromUi(openMicrophoneSettingsBtn);
 });
 
-accessibilityModalOpenSettingsBtn.addEventListener('click', async () => {
-  hideAccessibilityModal();
-  await openAccessibilitySettingsFromUi(accessibilityModalOpenSettingsBtn);
-});
-
-accessibilityModalLaterBtn.addEventListener('click', () => {
-  hideAccessibilityModal();
-});
-
 reopenOnboardingBtn.addEventListener('click', () => {
-  setActiveTab('settings');
-  showOnboarding();
+  showOnboarding({
+    step: missingPermissionLabels().length > 0 ? 'permissions' : 'welcome'
+  });
 });
 
 onboardingSkipBtn.addEventListener('click', () => {
@@ -2431,7 +2512,12 @@ onboardingBackBtn.addEventListener('click', () => {
   updateOnboardingStep();
 });
 
-onboardingNextBtn.addEventListener('click', () => {
+onboardingNextBtn.addEventListener('click', async () => {
+  if (onboardingStepOrder[onboardingStepIndex] === 'permissions') {
+    const ready = await ensureOnboardingPermissionsReady();
+    if (!ready) return;
+  }
+
   if (onboardingStepOrder[onboardingStepIndex] === 'api') {
     const apiError = validateOnboardingApiStep();
     if (apiError) {
@@ -2451,6 +2537,13 @@ onboardingNextBtn.addEventListener('click', () => {
 });
 
 onboardingFinishBtn.addEventListener('click', async () => {
+  const ready = await ensureOnboardingPermissionsReady();
+  if (!ready) {
+    onboardingStepIndex = onboardingStepIndexFor('permissions');
+    updateOnboardingStep();
+    return;
+  }
+
   const error = applyOnboardingSelectionsToSettingsForm();
   if (error) return;
 
@@ -2463,83 +2556,16 @@ onboardingFinishBtn.addEventListener('click', async () => {
   setActiveTab('home');
 });
 
-onboardingCheckAccessibilityBtn.addEventListener('click', async () => {
-  onboardingCheckAccessibilityBtn.disabled = true;
-  onboardingAccessibilityStatusEl.textContent = 'Checking Accessibility permission...';
-  try {
-    const permissionStatus = await invoke<AccessibilityPermissionStatus>('check_accessibility_permission');
-    const label = permissionStatus.is_supported
-      ? permissionStatus.is_granted
-        ? 'Granted'
-        : 'Not granted'
-      : 'Unsupported';
-    onboardingAccessibilityStatusEl.textContent = `[${label}] ${permissionStatus.guidance}`;
-    renderAccessibilityStatus(permissionStatus);
-  } catch (error) {
-    onboardingAccessibilityStatusEl.textContent = `Accessibility check failed: ${String(error)}`;
-  } finally {
-    onboardingCheckAccessibilityBtn.disabled = false;
-  }
-});
-
 onboardingOpenAccessibilitySettingsBtn.addEventListener('click', async () => {
-  onboardingOpenAccessibilitySettingsBtn.disabled = true;
-  try {
-    const message = await invoke<string>('open_accessibility_settings');
-    onboardingAccessibilityStatusEl.textContent = message;
-    setAccessibilityStatusSummary(message, true);
-  } catch (error) {
-    onboardingAccessibilityStatusEl.textContent = `Failed to open settings: ${String(error)}`;
-  } finally {
-    onboardingOpenAccessibilitySettingsBtn.disabled = false;
-  }
+  await openAccessibilitySettingsFromUi(onboardingOpenAccessibilitySettingsBtn);
 });
 
-onboardingCheckMicrophoneBtn.addEventListener('click', async () => {
-  onboardingCheckMicrophoneBtn.disabled = true;
-  onboardingMicrophoneStatusEl.textContent = 'Checking Microphone permission...';
-  try {
-    const permissionStatus = await invoke<MicrophonePermissionStatus>('check_microphone_permission');
-    const label = permissionStatus.is_supported
-      ? permissionStatus.is_granted
-        ? 'Granted'
-        : permissionStatus.status === 'unavailable'
-          ? 'Unavailable'
-          : 'Not granted'
-      : 'Unsupported';
-    onboardingMicrophoneStatusEl.textContent = `[${label}] ${permissionStatus.guidance}`;
-    renderMicrophoneStatus(permissionStatus);
-  } catch (error) {
-    onboardingMicrophoneStatusEl.textContent = `Microphone check failed: ${String(error)}`;
-  } finally {
-    onboardingCheckMicrophoneBtn.disabled = false;
-  }
+onboardingResetAccessibilityPermissionBtn.addEventListener('click', async () => {
+  await resetAccessibilityPermissionFromUi(onboardingResetAccessibilityPermissionBtn);
 });
 
 onboardingOpenMicrophoneSettingsBtn.addEventListener('click', async () => {
-  onboardingOpenMicrophoneSettingsBtn.disabled = true;
-  try {
-    const permissionStatus = await invoke<MicrophonePermissionStatus>('request_microphone_permission');
-    renderMicrophoneStatus(permissionStatus);
-    const label = permissionStatus.is_supported
-      ? permissionStatus.is_granted
-        ? 'Granted'
-        : permissionStatus.status === 'unavailable'
-          ? 'Unavailable'
-          : 'Not granted'
-      : 'Unsupported';
-    onboardingMicrophoneStatusEl.textContent = `[${label}] ${permissionStatus.guidance}`;
-
-    if (!permissionStatus.is_granted) {
-      const message = await invoke<string>('open_microphone_settings');
-      onboardingMicrophoneStatusEl.textContent = `${onboardingMicrophoneStatusEl.textContent} ${message}`;
-      setMicrophoneStatusSummary('Settings opened', true);
-    }
-  } catch (error) {
-    onboardingMicrophoneStatusEl.textContent = `Failed to request permission: ${String(error)}`;
-  } finally {
-    onboardingOpenMicrophoneSettingsBtn.disabled = false;
-  }
+  await openMicrophoneSettingsFromUi(onboardingOpenMicrophoneSettingsBtn);
 });
 
 copyDiagnosticsBtn.addEventListener('click', async () => {
@@ -2557,6 +2583,19 @@ copyDiagnosticsBtn.addEventListener('click', async () => {
   } finally {
     copyDiagnosticsBtn.disabled = false;
   }
+});
+
+statusBannerEl.addEventListener('click', () => {
+  if (statusBannerEl.dataset.action === 'setup') {
+    showPermissionOnboarding();
+  }
+});
+
+statusBannerEl.addEventListener('keydown', (event) => {
+  if (statusBannerEl.dataset.action !== 'setup') return;
+  if (event.key !== 'Enter' && event.key !== ' ') return;
+  event.preventDefault();
+  showPermissionOnboarding();
 });
 
 listen<TranscriptHistoryEntry[]>('transcript-history-updated', (event) => {

@@ -465,6 +465,9 @@
                         <button id="open-accessibility-settings-btn" type="button" class="ui-button ui-button-secondary">
                           Open Settings
                         </button>
+                        <button id="reset-accessibility-permission-btn" type="button" class="ui-button ui-button-secondary">
+                          Reset access
+                        </button>
                       </div>
                     </section>
 
@@ -514,27 +517,6 @@
       <p id="app-toast-text" class="app-toast-text"></p>
     </div>
 
-    <div
-      id="accessibility-modal"
-      class="modal-backdrop hidden"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="accessibility-modal-title"
-      aria-describedby="accessibility-modal-description"
-    >
-      <section class="modal-card modal-elevated">
-        <p class="eyebrow">Permission required</p>
-        <h2 id="accessibility-modal-title">Accessibility access is still needed</h2>
-        <p id="accessibility-modal-description" class="subtle">
-          This app needs Accessibility permission to paste into the currently focused input across apps and terminals.
-        </p>
-        <div class="buttons">
-          <button id="accessibility-modal-open-settings-btn" type="button" class="ui-button">Open System Settings</button>
-          <button id="accessibility-modal-later-btn" type="button" class="ui-button ui-button-secondary">Later</button>
-        </div>
-      </section>
-    </div>
-
     <div id="onboarding-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="onboarding-title">
       <section class="modal-card onboarding-card modal-elevated">
         <div class="onboarding-header">
@@ -552,26 +534,37 @@
         </section>
 
         <section class="onboarding-step hidden" data-onboarding-step="permissions">
-          <h3>Permissions checklist</h3>
+          <h3>Access</h3>
           <p id="onboarding-permissions-copy" class="subtle">
             Accessibility allows this app to insert text into the active app. Microphone permission is also required.
           </p>
-          <div class="buttons">
-            <button id="onboarding-check-accessibility-btn" type="button" class="ui-button ui-button-secondary">
-              Check accessibility
-            </button>
-            <button id="onboarding-open-accessibility-settings-btn" type="button" class="ui-button ui-button-secondary">
-              Open Accessibility Settings
-            </button>
-            <button id="onboarding-check-microphone-btn" type="button" class="ui-button ui-button-secondary">
-              Check microphone
-            </button>
-            <button id="onboarding-open-microphone-settings-btn" type="button" class="ui-button ui-button-secondary">
-              Open Microphone Settings
-            </button>
+          <div class="permission-list">
+            <section class="permission-row">
+              <div>
+                <h4>Accessibility</h4>
+                <p id="onboarding-accessibility-status" class="hint">Checking...</p>
+              </div>
+              <div class="buttons">
+                <button id="onboarding-open-accessibility-settings-btn" type="button" class="ui-button ui-button-secondary">
+                  Open Settings
+                </button>
+                <button id="onboarding-reset-accessibility-permission-btn" type="button" class="ui-button ui-button-secondary">
+                  Reset access
+                </button>
+              </div>
+            </section>
+            <section class="permission-row">
+              <div>
+                <h4>Microphone</h4>
+                <p id="onboarding-microphone-status" class="hint">Checking...</p>
+              </div>
+              <div class="buttons">
+                <button id="onboarding-open-microphone-settings-btn" type="button" class="ui-button ui-button-secondary">
+                  Allow Microphone
+                </button>
+              </div>
+            </section>
           </div>
-          <p id="onboarding-accessibility-status" class="hint">Not checked yet.</p>
-          <p id="onboarding-microphone-status" class="hint">Not checked yet.</p>
         </section>
 
         <section class="onboarding-step hidden" data-onboarding-step="api">

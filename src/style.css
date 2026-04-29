@@ -456,6 +456,15 @@ pre {
   box-shadow: none;
 }
 
+.status-banner.is-actionable {
+  cursor: pointer;
+  border-color: rgba(179, 83, 72, 0.34);
+}
+
+.status-banner.is-actionable:hover {
+  background: rgba(39, 31, 28, 0.96);
+}
+
 .status-indicator {
   width: 9px;
   height: 9px;
@@ -1487,6 +1496,33 @@ textarea.ui-input {
   font-size: 0.88rem;
 }
 
+.permission-list {
+  display: grid;
+  gap: 10px;
+}
+
+.permission-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid var(--stroke);
+  border-radius: 8px;
+  background: rgba(18, 26, 35, 0.88);
+}
+
+.permission-row h4 {
+  margin: 0 0 2px;
+  color: var(--text);
+  font-size: 0.82rem;
+  font-weight: 500;
+}
+
+.permission-row .hint {
+  margin: 0;
+}
+
 .onboarding-actions {
   justify-content: flex-end;
 }
@@ -1500,6 +1536,7 @@ textarea.ui-input {
 textarea.ui-input:focus,
 .ui-button:focus-visible,
 .sidebar-tab:focus-visible,
+.status-banner:focus-visible,
 .settings-nav-btn:focus-visible,
 .history-item:focus-visible,
 #sidebar-toggle-btn:focus-visible {
@@ -1668,6 +1705,11 @@ textarea.ui-input:focus,
 
   .history-row-time {
     font-size: 0.72rem;
+  }
+
+  .permission-row {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
 
