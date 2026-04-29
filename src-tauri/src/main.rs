@@ -872,167 +872,126 @@ fn check_microphone_permission(state: State<AppState>) -> MicrophonePermissionSt
         return MicrophonePermissionStatus {
             platform: std::env::consts::OS.to_string(),
             is_supported: true,
-            is_granted: false,
+            is_granted: true,
             status: "busy".to_string(),
-            guidance: "Microphone is already in use by the current recording.".to_string(),
+            guidance: "Microphone permission is granted; recording is active.".to_string(),
         };
     }
 
-    probe_microphone_permission()
+    current_microphone_permission_status()
 }
 
-fn probe_microphone_permission() -> MicrophonePermissionStatus {
-    let app_name = app_display_name();
-    let host = cpal::default_host();
-    let Some(device) = host.default_input_device() else {
+#[tauri::command]
+fn request_microphone_permission(state: State<AppState>) -> MicrophonePermissionStatus {
+    if state
+        .recorder
+        .lock()
+        .map(|recorder| recorder.is_some())
+        .unwrap_or(false)
+    {
         return MicrophonePermissionStatus {
             platform: std::env::consts::OS.to_string(),
             is_supported: true,
-            is_granted: false,
-            status: "unavailable".to_string(),
-            guidance: "No default microphone input device was found.".to_string(),
-        };
-    };
-
-    let Ok(supported_config) = device.default_input_config() else {
-        return MicrophonePermissionStatus {
-            platform: std::env::consts::OS.to_string(),
-            is_supported: true,
-            is_granted: false,
-            status: "unavailable".to_string(),
-            guidance: "No default microphone input configuration was found.".to_string(),
-        };
-    };
-
-    let sample_count = Arc::new(AtomicU64::new(0));
-    let err_fn = |err| {
-        eprintln!("Microphone permission probe stream error: {err}");
-    };
-    let stream_config: cpal::StreamConfig = supported_config.clone().into();
-    let stream_result = match supported_config.sample_format() {
-        cpal::SampleFormat::F32 => {
-            let sample_count = sample_count.clone();
-            device.build_input_stream(
-                &stream_config,
-                move |data: &[f32], _| {
-                    sample_count.fetch_add(data.len() as u64, Ordering::Relaxed);
-                },
-                err_fn,
-                None,
-            )
-        }
-        cpal::SampleFormat::I16 => {
-            let sample_count = sample_count.clone();
-            device.build_input_stream(
-                &stream_config,
-                move |data: &[i16], _| {
-                    sample_count.fetch_add(data.len() as u64, Ordering::Relaxed);
-                },
-                err_fn,
-                None,
-            )
-        }
-        cpal::SampleFormat::U16 => {
-            let sample_count = sample_count.clone();
-            device.build_input_stream(
-                &stream_config,
-                move |data: &[u16], _| {
-                    sample_count.fetch_add(data.len() as u64, Ordering::Relaxed);
-                },
-                err_fn,
-                None,
-            )
-        }
-        other => {
-            return MicrophonePermissionStatus {
-                platform: std::env::consts::OS.to_string(),
-                is_supported: true,
-                is_granted: false,
-                status: "unsupported".to_string(),
-                guidance: format!("Unsupported microphone sample format: {other:?}."),
-            };
-        }
-    };
-
-    let stream = match stream_result {
-        Ok(stream) => stream,
-        Err(error) => {
-            return MicrophonePermissionStatus {
-                platform: std::env::consts::OS.to_string(),
-                is_supported: true,
-                is_granted: false,
-                status: "missing".to_string(),
-                guidance: format!(
-                    "Microphone permission is not granted. Open System Settings > Privacy & Security > Microphone and enable {app_name}. ({error})"
-                ),
-            };
-        }
-    };
-
-    if let Err(error) = stream.play() {
-        return MicrophonePermissionStatus {
-            platform: std::env::consts::OS.to_string(),
-            is_supported: true,
-            is_granted: false,
-            status: "missing".to_string(),
-            guidance: format!(
-                "Microphone permission is not granted. Open System Settings > Privacy & Security > Microphone and enable {app_name}. ({error})"
-            ),
+            is_granted: true,
+            status: "busy".to_string(),
+            guidance: "Microphone permission is granted; recording is active.".to_string(),
         };
     }
 
-    thread::sleep(Duration::from_millis(250));
-    drop(stream);
+    request_microphone_permission_status()
+}
 
-    if sample_count.load(Ordering::Relaxed) > 0 {
-        MicrophonePermissionStatus {
-            platform: std::env::consts::OS.to_string(),
+fn current_microphone_permission_status() -> MicrophonePermissionStatus {
+    microphone_status_from_macos_authorization(unsafe { keylesss_microphone_authorization_status() })
+}
+
+fn request_microphone_permission_status() -> MicrophonePermissionStatus {
+    let status = unsafe { keylesss_microphone_authorization_status() };
+    if status == MACOS_AV_AUTHORIZATION_NOT_DETERMINED {
+        let granted = unsafe { keylesss_request_microphone_access() };
+        return if granted {
+            microphone_status_from_macos_authorization(MACOS_AV_AUTHORIZATION_AUTHORIZED)
+        } else {
+            microphone_status_from_macos_authorization(unsafe {
+                keylesss_microphone_authorization_status()
+            })
+        };
+    }
+
+    microphone_status_from_macos_authorization(status)
+}
+
+const MACOS_AV_AUTHORIZATION_NOT_DETERMINED: i32 = 0;
+const MACOS_AV_AUTHORIZATION_RESTRICTED: i32 = 1;
+const MACOS_AV_AUTHORIZATION_DENIED: i32 = 2;
+const MACOS_AV_AUTHORIZATION_AUTHORIZED: i32 = 3;
+
+fn microphone_status_from_macos_authorization(status: i32) -> MicrophonePermissionStatus {
+    let app_name = app_display_name();
+    match status {
+        MACOS_AV_AUTHORIZATION_AUTHORIZED => MicrophonePermissionStatus {
+            platform: "macOS".to_string(),
             is_supported: true,
             is_granted: true,
             status: "granted".to_string(),
             guidance: "Microphone permission is granted.".to_string(),
-        }
-    } else {
-        MicrophonePermissionStatus {
-            platform: std::env::consts::OS.to_string(),
+        },
+        MACOS_AV_AUTHORIZATION_NOT_DETERMINED => MicrophonePermissionStatus {
+            platform: "macOS".to_string(),
             is_supported: true,
             is_granted: false,
-            status: "missing".to_string(),
-            guidance: format!(
-                "No microphone input was received. Open System Settings > Privacy & Security > Microphone and enable {app_name}."
-            ),
-        }
+            status: "not_determined".to_string(),
+            guidance: format!("Microphone permission has not been requested yet. Allow {app_name} when macOS asks."),
+        },
+        MACOS_AV_AUTHORIZATION_DENIED => MicrophonePermissionStatus {
+            platform: "macOS".to_string(),
+            is_supported: true,
+            is_granted: false,
+            status: "denied".to_string(),
+            guidance: format!("Microphone permission is denied. Open System Settings > Privacy & Security > Microphone and enable {app_name}."),
+        },
+        MACOS_AV_AUTHORIZATION_RESTRICTED => MicrophonePermissionStatus {
+            platform: "macOS".to_string(),
+            is_supported: true,
+            is_granted: false,
+            status: "restricted".to_string(),
+            guidance: "Microphone permission is restricted by macOS policy.".to_string(),
+        },
+        _ => MicrophonePermissionStatus {
+            platform: "macOS".to_string(),
+            is_supported: true,
+            is_granted: false,
+            status: "unknown".to_string(),
+            guidance: format!("macOS returned an unknown microphone permission status: {status}."),
+        },
     }
+}
+
+unsafe extern "C" {
+    fn keylesss_microphone_authorization_status() -> i32;
+    fn keylesss_request_microphone_access() -> bool;
 }
 
 #[tauri::command]
 fn open_microphone_settings() -> Result<String, String> {
-    #[cfg(target_os = "macos")]
-    {
-        let app_name = app_display_name();
-        let urls = [
-            "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
-            "x-apple.systempreferences:com.apple.preference.security?Privacy",
-        ];
+    let app_name = app_display_name();
+    let urls = [
+        "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
+        "x-apple.systempreferences:com.apple.preference.security?Privacy",
+    ];
 
-        for url in urls {
-            match Command::new("open").arg(url).status() {
-                Ok(status) if status.success() => {
-                    return Ok(format!(
-                        "Opened macOS Privacy settings. Enable Microphone for {app_name}."
-                    ));
-                }
-                _ => {}
+    for url in urls {
+        match Command::new("open").arg(url).status() {
+            Ok(status) if status.success() => {
+                return Ok(format!(
+                    "Opened macOS Privacy settings. Enable Microphone for {app_name}."
+                ));
             }
+            _ => {}
         }
-
-        Err("Failed to open macOS Microphone settings automatically. Open System Settings > Privacy & Security > Microphone manually.".to_string())
     }
 
-    #[cfg(not(target_os = "macos"))]
-    {
-        Err("Opening Microphone settings is only supported on macOS in this app.".to_string())
-    }
+    Err("Failed to open macOS Microphone settings automatically. Open System Settings > Privacy & Security > Microphone manually.".to_string())
 }
 
 fn settings_path(app: &AppHandle) -> Result<PathBuf, AppError> {
@@ -4846,6 +4805,7 @@ fn main() {
             check_accessibility_permission,
             open_accessibility_settings,
             check_microphone_permission,
+            request_microphone_permission,
             open_microphone_settings
         ])
         .run(tauri::generate_context!())

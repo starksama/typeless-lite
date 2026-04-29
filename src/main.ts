@@ -1438,6 +1438,13 @@ async function openAccessibilitySettingsFromUi(button: HTMLButtonElement): Promi
 async function openMicrophoneSettingsFromUi(button: HTMLButtonElement): Promise<void> {
   button.disabled = true;
   try {
+    const permissionStatus = await invoke<MicrophonePermissionStatus>('request_microphone_permission');
+    renderMicrophoneStatus(permissionStatus);
+    if (permissionStatus.is_granted) {
+      statusEl.textContent = permissionStatus.guidance;
+      return;
+    }
+
     const message = await invoke<string>('open_microphone_settings');
     statusEl.textContent = message;
     setMicrophoneStatusSummary('Settings opened', true);
@@ -2512,11 +2519,24 @@ onboardingCheckMicrophoneBtn.addEventListener('click', async () => {
 onboardingOpenMicrophoneSettingsBtn.addEventListener('click', async () => {
   onboardingOpenMicrophoneSettingsBtn.disabled = true;
   try {
-    const message = await invoke<string>('open_microphone_settings');
-    onboardingMicrophoneStatusEl.textContent = message;
-    setMicrophoneStatusSummary(message, true);
+    const permissionStatus = await invoke<MicrophonePermissionStatus>('request_microphone_permission');
+    renderMicrophoneStatus(permissionStatus);
+    const label = permissionStatus.is_supported
+      ? permissionStatus.is_granted
+        ? 'Granted'
+        : permissionStatus.status === 'unavailable'
+          ? 'Unavailable'
+          : 'Not granted'
+      : 'Unsupported';
+    onboardingMicrophoneStatusEl.textContent = `[${label}] ${permissionStatus.guidance}`;
+
+    if (!permissionStatus.is_granted) {
+      const message = await invoke<string>('open_microphone_settings');
+      onboardingMicrophoneStatusEl.textContent = `${onboardingMicrophoneStatusEl.textContent} ${message}`;
+      setMicrophoneStatusSummary('Settings opened', true);
+    }
   } catch (error) {
-    onboardingMicrophoneStatusEl.textContent = `Failed to open settings: ${String(error)}`;
+    onboardingMicrophoneStatusEl.textContent = `Failed to request permission: ${String(error)}`;
   } finally {
     onboardingOpenMicrophoneSettingsBtn.disabled = false;
   }
