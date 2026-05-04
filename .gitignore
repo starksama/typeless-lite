@@ -6,3 +6,4 @@ src-tauri/target/
 Cargo.lock
 
 .omx
+.agents/

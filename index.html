@@ -3,7 +3,23 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Desktop Dictation</title>
+    <meta name="color-scheme" content="dark light" />
+    <title>Keylesss</title>
+    <script>
+      (() => {
+        try {
+          const preference = localStorage.getItem('keylesss:theme-mode:v1') || 'system';
+          const isLight =
+            preference === 'light' ||
+            (preference === 'system' && window.matchMedia('(prefers-color-scheme: light)').matches);
+          document.documentElement.dataset.theme = isLight ? 'light' : 'dark';
+          document.documentElement.dataset.themePreference = preference;
+        } catch {
+          document.documentElement.dataset.theme = 'dark';
+          document.documentElement.dataset.themePreference = 'system';
+        }
+      })();
+    </script>
     <link rel="stylesheet" href="/src/style.css" />
     <script type="module" src="/src/main.ts" defer></script>
   </head>
@@ -162,17 +178,17 @@
             <div class="home-topbar">
               <div class="home-heading">
                 <p class="eyebrow">Overview</p>
-                <h2>Ready to dictate</h2>
+                <h2>Capture text</h2>
               </div>
 
               <div class="buttons home-actions">
                 <button id="home-toggle-btn" type="button" class="ui-button">Start recording</button>
-                <button id="home-fast-mode-btn" type="button" class="ui-button ui-button-secondary">Turn polishing On</button>
+                <button id="home-fast-mode-btn" type="button" class="ui-button ui-button-secondary">Enable polishing</button>
               </div>
             </div>
 
             <p class="hint home-fast-mode-hint">
-              Additional polishing <strong id="home-fast-mode-state">OFF</strong>
+              Polishing <strong id="home-fast-mode-state">OFF</strong>
             </p>
 
             <div class="home-stats" aria-label="Usage summary">
@@ -211,7 +227,7 @@
               <p class="eyebrow">Live capture</p>
               <h2>Dictation</h2>
               <p id="mode-status-text" class="subtle">
-                Hold Cmd+Space to speak, or press Option+Space to start and stop hands-free recording.
+                Ready.
               </p>
             </div>
 
@@ -291,14 +307,14 @@
 
                   <div class="buttons">
                     <button id="reopen-onboarding-btn" type="button" class="ui-button ui-button-secondary">
-                      Reopen onboarding
+                      Setup guide
                     </button>
-                    <button id="save-settings-btn" type="submit" class="ui-button">Save settings</button>
+                    <button id="save-settings-btn" type="submit" class="ui-button">Save</button>
                   </div>
                 </div>
 
                 <div class="settings-top-status" aria-label="Settings status">
-                  <p><span>Runtime</span> <strong id="settings-runtime-status">Loading...</strong></p>
+                  <p><span>Runtime</span> <strong id="settings-runtime-status">Checking</strong></p>
                 </div>
 
                 <section class="settings-panel is-active" data-settings-panel="general">
@@ -308,7 +324,16 @@
 
                   <div class="settings-panel-grid">
                     <label class="ui-field">
-                      <span class="ui-label">Button mode</span>
+                      <span class="ui-label">Appearance</span>
+                      <select id="themeMode" class="ui-select">
+                        <option value="system">System</option>
+                        <option value="light">Light</option>
+                        <option value="dark">Dark</option>
+                      </select>
+                    </label>
+
+                    <label class="ui-field">
+                      <span class="ui-label">Recording mode</span>
                       <select id="recordingMode" class="ui-select">
                         <option value="hold">Hold to record</option>
                         <option value="toggle">Toggle start/stop</option>
@@ -336,7 +361,7 @@
                       <input id="playSoundCues" type="checkbox" checked />
                       <span>
                         <strong>Sound cues</strong>
-                        <span>Play subtle start, success, and error feedback sounds.</span>
+                        <span>Play start, finish, and error sounds.</span>
                       </span>
                     </label>
                   </div>
@@ -356,7 +381,7 @@
                       <div class="shortcut-item-body">
                         <div id="hold-shortcut-list" class="shortcut-entry-list"></div>
                         <button id="hold-shortcut-add-btn" type="button" class="ui-button ui-button-secondary shortcut-add-btn">
-                          Add shortcut
+                          Add
                         </button>
                       </div>
                       <p id="hold-hotkey-validation" class="field-message hidden" role="status" aria-live="polite"></p>
@@ -369,7 +394,7 @@
                       <div class="shortcut-item-body">
                         <div id="toggle-shortcut-list" class="shortcut-entry-list"></div>
                         <button id="toggle-shortcut-add-btn" type="button" class="ui-button ui-button-secondary shortcut-add-btn">
-                          Add shortcut
+                          Add
                         </button>
                       </div>
                       <p id="toggle-hotkey-validation" class="field-message hidden" role="status" aria-live="polite"></p>
@@ -406,7 +431,7 @@
                   </div>
 
                   <label class="ui-field">
-                    <span class="ui-label">Polishing prompt</span>
+                    <span class="ui-label">Transform prompt</span>
                     <textarea id="promptTemplate" class="ui-input" rows="6" required></textarea>
                   </label>
 
@@ -416,7 +441,7 @@
                       id="customVocabulary"
                       class="ui-input"
                       rows="3"
-                      placeholder="Domain terms, names, acronyms (comma or newline separated)"
+                      placeholder="Names, product terms, acronyms"
                     ></textarea>
                   </label>
 
@@ -424,8 +449,8 @@
                     <label class="toggle-card checkbox-label">
                       <input id="formatEnabled" type="checkbox" />
                       <span>
-                        <strong>Additional polishing</strong>
-                        <span>Optional extra OpenAI pass after transcription for cleanup and style.</span>
+                        <strong>Polishing</strong>
+                        <span>Clean punctuation and wording after transcription.</span>
                       </span>
                     </label>
 
@@ -433,7 +458,7 @@
                       <input id="skipFormatterInTerminals" type="checkbox" checked />
                       <span>
                         <strong>Skip polishing in terminals</strong>
-                        <span>Safer for shell commands and command-line workflows.</span>
+                        <span>Insert raw transcript in shell apps.</span>
                       </span>
                     </label>
 
@@ -441,7 +466,7 @@
                       <input id="includeClipboardContext" type="checkbox" checked />
                       <span>
                         <strong>Use clipboard context</strong>
-                        <span>Include current clipboard text as optional terminology context when polishing runs.</span>
+                        <span>Use copied text as optional style context.</span>
                       </span>
                     </label>
                   </div>
@@ -453,32 +478,34 @@
                   </div>
 
                   <div class="diagnostics-grid">
-                    <section class="support-card support-card-strong">
+                    <section class="support-card support-card-strong" id="settings-accessibility-card" data-permission-state="checking">
                       <div class="support-card-head">
                         <h3>Accessibility</h3>
                         <strong id="accessibility-status" class="support-card-status">Unknown</strong>
                       </div>
+                      <p id="settings-accessibility-guidance" class="hint">Check access before recording.</p>
                       <div class="buttons">
                         <button id="check-accessibility-btn" type="button" class="ui-button ui-button-secondary">
-                          Check
+                          Check again
                         </button>
                         <button id="open-accessibility-settings-btn" type="button" class="ui-button ui-button-secondary">
-                          Open Settings
+                          Open Accessibility
                         </button>
                         <button id="reset-accessibility-permission-btn" type="button" class="ui-button ui-button-secondary">
-                          Reset access
+                          Reset
                         </button>
                       </div>
                     </section>
 
-                    <section class="support-card support-card-strong">
+                    <section class="support-card support-card-strong" id="settings-microphone-card" data-permission-state="checking">
                       <div class="support-card-head">
                         <h3>Microphone</h3>
                         <strong id="microphone-status" class="support-card-status">Unknown</strong>
                       </div>
+                      <p id="settings-microphone-guidance" class="hint">Check access before recording.</p>
                       <div class="buttons">
                         <button id="check-microphone-btn" type="button" class="ui-button ui-button-secondary">
-                          Check
+                          Check again
                         </button>
                         <button id="open-microphone-settings-btn" type="button" class="ui-button ui-button-secondary">
                           Allow
@@ -489,13 +516,13 @@
 
                     <section class="support-card support-card-strong">
                       <div class="support-card-head">
-                        <h3>Diagnostics</h3>
+                        <h3>API</h3>
                         <strong id="settings-diagnostics-copy-status" class="support-card-status hidden"></strong>
                         <span id="settings-accessibility-status" class="hidden">Unknown</span>
                       </div>
                       <div class="buttons">
-                        <button id="test-api-btn" type="button" class="ui-button ui-button-secondary">Test API</button>
-                        <button id="copy-diagnostics-btn" type="button" class="ui-button ui-button-secondary">Copy diagnostics</button>
+                        <button id="test-api-btn" type="button" class="ui-button ui-button-secondary">Test connection</button>
+                        <button id="copy-diagnostics-btn" type="button" class="ui-button ui-button-secondary">Copy report</button>
                       </div>
                       <p id="settings-api-test-status" class="hint hidden"></p>
                     </section>
@@ -525,40 +552,48 @@
         </div>
 
         <section class="onboarding-step" data-onboarding-step="welcome">
-          <p class="subtle">This setup takes about one minute and gets dictation working without opening a wall of settings.</p>
+          <p class="subtle">Set the three things Keylesss needs before your first dictation.</p>
           <ul class="onboarding-list">
-            <li>Confirm the permissions needed for cross-app insertion.</li>
-            <li>Add your API connection details once.</li>
-            <li>Choose the default mode, language, and hotkey.</li>
+            <li>Allow microphone recording.</li>
+            <li>Allow Accessibility so Keylesss can insert text into other apps.</li>
+            <li>Add an API key and choose your shortcut.</li>
           </ul>
         </section>
 
         <section class="onboarding-step hidden" data-onboarding-step="permissions">
           <h3>Access</h3>
           <p id="onboarding-permissions-copy" class="subtle">
-            Microphone access comes from the macOS prompt; it cannot be added manually.
+            Complete both rows. Microphone uses a macOS prompt; Accessibility opens System Settings.
           </p>
           <div class="permission-list">
-            <section class="permission-row">
+            <section id="onboarding-accessibility-row" class="permission-row" data-permission-state="checking">
               <div>
+                <span class="permission-kicker">Required for text insertion</span>
                 <h4>Accessibility</h4>
-                <p id="onboarding-accessibility-status" class="hint">Checking...</p>
+                <p id="onboarding-accessibility-status" class="hint">Checking</p>
               </div>
               <div class="buttons">
+                <button id="onboarding-check-accessibility-btn" type="button" class="ui-button ui-button-secondary">
+                  Check again
+                </button>
                 <button id="onboarding-open-accessibility-settings-btn" type="button" class="ui-button ui-button-secondary">
-                  Open Settings
+                  Open Accessibility
                 </button>
                 <button id="onboarding-reset-accessibility-permission-btn" type="button" class="ui-button ui-button-secondary">
-                  Reset access
+                  Reset
                 </button>
               </div>
             </section>
-            <section class="permission-row">
+            <section id="onboarding-microphone-row" class="permission-row" data-permission-state="checking">
               <div>
+                <span class="permission-kicker">Required for recording</span>
                 <h4>Microphone</h4>
-                <p id="onboarding-microphone-status" class="hint">Checking...</p>
+                <p id="onboarding-microphone-status" class="hint">Checking</p>
               </div>
               <div class="buttons">
+                <button id="onboarding-check-microphone-btn" type="button" class="ui-button ui-button-secondary">
+                  Check again
+                </button>
                 <button id="onboarding-open-microphone-settings-btn" type="button" class="ui-button ui-button-secondary">
                   Allow
                 </button>
@@ -569,7 +604,7 @@
 
         <section class="onboarding-step hidden" data-onboarding-step="api">
           <h3>API setup</h3>
-          <p class="subtle">Add your API key and base URL. Both are saved locally in app settings.</p>
+          <p class="subtle">Saved locally. Test it later from Settings > Access.</p>
 
           <label class="ui-field">
             <span class="ui-label">OpenAI API key</span>
@@ -588,11 +623,11 @@
         </section>
 
         <section class="onboarding-step hidden" data-onboarding-step="quick-setup">
-          <h3>Button mode, hold shortcut, and language</h3>
+          <h3>Mode, language, shortcut</h3>
 
           <div class="settings-panel-grid">
             <label class="ui-field">
-              <span class="ui-label">Button mode</span>
+              <span class="ui-label">Recording mode</span>
               <select id="onboarding-recording-mode" class="ui-select">
                 <option value="hold">Hold to record</option>
                 <option value="toggle">Toggle start/stop</option>
@@ -631,11 +666,11 @@
 
         <section class="onboarding-step hidden" data-onboarding-step="finish">
           <h3>Setup complete</h3>
-          <p class="subtle">You are ready to dictate. Save and start from the Home or Dictation page.</p>
+          <p class="subtle">Save now, then start from Home or use your shortcut in another app.</p>
         </section>
 
         <div class="buttons onboarding-actions">
-          <button id="onboarding-skip-btn" type="button" class="ui-button ui-button-secondary">Skip for now</button>
+          <button id="onboarding-skip-btn" type="button" class="ui-button ui-button-secondary">Do later</button>
           <button id="onboarding-back-btn" type="button" class="ui-button ui-button-secondary">Back</button>
           <button id="onboarding-next-btn" type="button" class="ui-button">Next</button>
           <button id="onboarding-finish-btn" type="button" class="ui-button hidden">Finish setup</button>

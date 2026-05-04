@@ -674,14 +674,12 @@ async fn test_api_connection(state: State<'_, AppState>) -> Result<String, Strin
 
     let api_key = settings.api_key.trim();
     if api_key.is_empty() {
-        return Err("API key is missing. Add your API key and save settings first.".to_string());
+        return Err("Add your OpenAI API key, save, then test again.".to_string());
     }
 
     let base_url = settings.api_base_url.trim().trim_end_matches('/');
     if base_url.is_empty() {
-        return Err(
-            "API base URL is missing. Set it (example: https://api.openai.com/v1).".to_string(),
-        );
+        return Err("Add an API base URL, for example https://api.openai.com/v1.".to_string());
     }
 
     let url = format!("{base_url}/models");
@@ -699,7 +697,7 @@ async fn test_api_connection(state: State<'_, AppState>) -> Result<String, Strin
 
     let status = response.status();
     if status.is_success() {
-        return Ok("API connection successful.".to_string());
+        return Ok("API ok.".to_string());
     }
 
     let body = response
@@ -708,16 +706,13 @@ async fn test_api_connection(state: State<'_, AppState>) -> Result<String, Strin
         .unwrap_or_else(|_| "<no response body>".to_string());
 
     match status.as_u16() {
-        401 => Err(
-            "Connection failed (401 Unauthorized). Your API key looks invalid. Double-check it and save again."
-                .to_string(),
-        ),
+        401 => Err("API key rejected. Paste a valid key, save, then test again.".to_string()),
         404 => Err(
-            "Connection failed (404 Not Found). API base URL is likely incorrect. Check it includes the right version path (for OpenAI: https://api.openai.com/v1)."
+            "API base URL not found. Use https://api.openai.com/v1 or your provider's /v1 endpoint."
                 .to_string(),
         ),
         _ => Err(format!(
-            "Connection failed ({status}). API response: {}",
+            "API returned {status}: {}",
             summarize_http_body(&body)
         )),
     }
@@ -754,8 +749,7 @@ fn current_accessibility_permission_status() -> AccessibilityPermissionStatus {
             is_supported: false,
             is_granted: false,
             status: "unsupported".to_string(),
-            guidance: "Accessibility permission checks are currently implemented for macOS only."
-                .to_string(),
+            guidance: "Accessibility setup is available on macOS only.".to_string(),
         }
     }
 }
@@ -768,7 +762,7 @@ fn accessibility_status_from_macos_trust(is_trusted: bool) -> AccessibilityPermi
             is_supported: true,
             is_granted: true,
             status: "granted".to_string(),
-            guidance: "Enabled".to_string(),
+            guidance: "Ready to insert text into the focused app.".to_string(),
         }
     } else {
         AccessibilityPermissionStatus {
@@ -776,7 +770,10 @@ fn accessibility_status_from_macos_trust(is_trusted: bool) -> AccessibilityPermi
             is_supported: true,
             is_granted: false,
             status: "missing".to_string(),
-            guidance: "Needs access".to_string(),
+            guidance: format!(
+                "Open Accessibility, turn {} on, then click Check again.",
+                app_display_name()
+            ),
         }
     }
 }
@@ -795,14 +792,14 @@ fn open_accessibility_settings() -> Result<String, String> {
             match Command::new("open").arg(url).status() {
                 Ok(status) if status.success() => {
                     return Ok(format!(
-                        "Opened macOS Privacy settings. Enable Accessibility for {app_name}."
+                        "Opened Accessibility. Turn {app_name} on, then return to Keylesss and click Check again."
                     ));
                 }
                 _ => {}
             }
         }
 
-        Err("Failed to open macOS Accessibility settings automatically. Open System Settings > Privacy & Security > Accessibility manually.".to_string())
+        Err("Could not open Accessibility. Open System Settings > Privacy & Security > Accessibility.".to_string())
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -821,12 +818,15 @@ fn reset_accessibility_permission() -> Result<String, String> {
             .map_err(|e| format!("Failed to reset macOS Accessibility access: {e}"))?;
 
         if output.status.success() {
-            return Ok("Accessibility reset. Enable it again in System Settings.".to_string());
+            return Ok(format!(
+                "Accessibility reset. Turn {} on again in System Settings.",
+                app_display_name()
+            ));
         }
 
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         Err(if stderr.is_empty() {
-            "macOS did not reset Accessibility access.".to_string()
+            "macOS did not reset Accessibility access. Open Accessibility and turn Keylesss off and on manually.".to_string()
         } else {
             format!("macOS did not reset Accessibility access: {stderr}")
         })
@@ -851,7 +851,7 @@ fn check_microphone_permission(state: State<AppState>) -> MicrophonePermissionSt
             is_supported: true,
             is_granted: true,
             status: "busy".to_string(),
-            guidance: "Microphone permission is granted; recording is active.".to_string(),
+            guidance: "Recording is active.".to_string(),
         };
     }
 
@@ -871,7 +871,7 @@ fn request_microphone_permission(state: State<AppState>) -> MicrophonePermission
             is_supported: true,
             is_granted: true,
             status: "busy".to_string(),
-            guidance: "Microphone permission is granted; recording is active.".to_string(),
+            guidance: "Recording is active.".to_string(),
         };
     }
 
@@ -913,30 +913,28 @@ fn microphone_status_from_macos_authorization(status: i32) -> MicrophonePermissi
             is_supported: true,
             is_granted: true,
             status: "granted".to_string(),
-            guidance: "Microphone permission is granted.".to_string(),
+            guidance: "Ready to record.".to_string(),
         },
         MACOS_AV_AUTHORIZATION_NOT_DETERMINED => MicrophonePermissionStatus {
             platform: "macOS".to_string(),
             is_supported: true,
             is_granted: false,
             status: "not_determined".to_string(),
-            guidance: format!("Click Allow. macOS adds {app_name} to Microphone after the prompt."),
+            guidance: format!("Click Allow in the macOS prompt for {app_name}."),
         },
         MACOS_AV_AUTHORIZATION_DENIED => MicrophonePermissionStatus {
             platform: "macOS".to_string(),
             is_supported: true,
             is_granted: false,
             status: "denied".to_string(),
-            guidance: format!(
-                "Open System Settings > Privacy & Security > Microphone and turn {app_name} on."
-            ),
+            guidance: format!("Open Microphone, turn {app_name} on, then click Check again."),
         },
         MACOS_AV_AUTHORIZATION_RESTRICTED => MicrophonePermissionStatus {
             platform: "macOS".to_string(),
             is_supported: true,
             is_granted: false,
             status: "restricted".to_string(),
-            guidance: "Microphone permission is restricted by macOS policy.".to_string(),
+            guidance: "Microphone is restricted by macOS policy.".to_string(),
         },
         _ => MicrophonePermissionStatus {
             platform: "macOS".to_string(),
@@ -966,14 +964,17 @@ fn open_microphone_settings() -> Result<String, String> {
         match Command::new("open").arg(url).status() {
             Ok(status) if status.success() => {
                 return Ok(format!(
-                    "Opened macOS Microphone settings. Turn {app_name} on if it appears."
+                    "Opened Microphone. Turn {app_name} on, then return to Keylesss and click Check again."
                 ));
             }
             _ => {}
         }
     }
 
-    Err("Failed to open macOS Microphone settings automatically. Open System Settings > Privacy & Security > Microphone manually.".to_string())
+    Err(
+        "Could not open Microphone. Open System Settings > Privacy & Security > Microphone."
+            .to_string(),
+    )
 }
 
 fn settings_path(app: &AppHandle) -> Result<PathBuf, AppError> {
@@ -1180,14 +1181,14 @@ fn push_transcript_history_entry(
 fn map_test_connection_error(error: reqwest::Error) -> String {
     if error.is_timeout() {
         return format!(
-            "Connection timed out after {API_TEST_TIMEOUT_SECS}s. Check your network, firewall/VPN settings, and API base URL."
+            "API timed out after {API_TEST_TIMEOUT_SECS}s. Check network/VPN and the API base URL."
         );
     }
     if error.is_connect() || error.is_request() {
-        return "Could not reach the API host. Verify your internet connection and API base URL."
+        return "Could not reach the API host. Check internet connection and API base URL."
             .to_string();
     }
-    format!("Connection test failed: {error}")
+    format!("API test could not finish: {error}")
 }
 
 fn summarize_http_body(body: &str) -> String {
@@ -1381,8 +1382,8 @@ impl RecordingModeKind {
 
     fn start_hint(self) -> &'static str {
         match self {
-            Self::Hold => "Recording... release the hold shortcut or click stop.",
-            Self::Toggle => "Recording... press the toggle shortcut again or click stop.",
+            Self::Hold => "Recording. Release the hold shortcut or click stop.",
+            Self::Toggle => "Recording. Press the hands-free shortcut again or click stop.",
         }
     }
 }
@@ -1421,9 +1422,11 @@ enum ShortcutBindingError {
     EmptyShortcut(&'static str),
     #[error("Each shortcut must be unique across hold and hands-free actions.")]
     DuplicateBindings,
-    #[error("{label} is invalid. Use one supported key with one or two modifiers. Modifier-only shortcuts are not supported here yet. Single F keys also work.")]
+    #[error(
+        "{label} is invalid. Use one regular key with one or two modifiers, or use a single F key."
+    )]
     InvalidFormat { label: &'static str },
-    #[error("{label} must use one supported key with one or two modifiers. Modifier-only shortcuts are not supported here yet. Single F keys also work.")]
+    #[error("{label} must use one regular key with one or two modifiers, or use a single F key.")]
     PolicyViolation { label: &'static str },
     #[error("{label} isn't available right now. Choose another shortcut.")]
     Unavailable { label: &'static str },
@@ -1781,11 +1784,15 @@ mod permission_status_tests {
     fn accessibility_status_copy_stays_compact() {
         let granted = accessibility_status_from_macos_trust(true);
         assert!(granted.is_granted);
-        assert_eq!(granted.guidance, "Enabled");
+        assert_eq!(
+            granted.guidance,
+            "Ready to insert text into the focused app."
+        );
 
         let missing = accessibility_status_from_macos_trust(false);
         assert!(!missing.is_granted);
-        assert_eq!(missing.guidance, "Needs access");
+        assert!(missing.guidance.contains("Open Accessibility"));
+        assert!(missing.guidance.contains("Check again"));
     }
 
     #[test]
@@ -1794,7 +1801,7 @@ mod permission_status_tests {
             microphone_status_from_macos_authorization(MACOS_AV_AUTHORIZATION_NOT_DETERMINED);
         assert!(!not_requested.is_granted);
         assert_eq!(not_requested.status, "not_determined");
-        assert!(not_requested.guidance.contains("after the prompt"));
+        assert!(not_requested.guidance.contains("macOS prompt"));
 
         let denied = microphone_status_from_macos_authorization(MACOS_AV_AUTHORIZATION_DENIED);
         assert!(!denied.is_granted);
@@ -2100,7 +2107,7 @@ fn toggle_recording_with_mode(
                 Some(false),
                 Some(false),
                 Some(0),
-                "Recording too short — hold hotkey and speak longer.".to_string(),
+                "Recording too short. Hold the shortcut and speak longer.".to_string(),
             );
             play_earcon_if_enabled(state, Earcon::Error);
             return Ok(());
@@ -2143,7 +2150,7 @@ fn toggle_recording_with_mode(
                     Some(false),
                     Some(false),
                     Some(0),
-                    format!("Failed: {err}{draft_hint}"),
+                    format!("Dictation failed: {err}{draft_hint}"),
                 );
                 play_earcon_if_enabled(&app_state, Earcon::Error);
             }
@@ -2456,7 +2463,7 @@ async fn process_audio_pipeline(
 
         if settings.api_key.is_empty() {
             return Err(AppError::Message(
-                "Missing API key. Save it in settings first.".to_string(),
+                "Add your OpenAI API key in Settings > AI, then save.".to_string(),
             ));
         }
 
@@ -2645,7 +2652,8 @@ async fn transcribe_audio(
                 }
 
                 return Err(AppError::Message(format!(
-                    "Transcription failed ({status}): {body}"
+                    "Transcription API returned {status}: {}",
+                    summarize_http_body(&body)
                 )));
             }
             Err(error) => {
@@ -2661,7 +2669,7 @@ async fn transcribe_audio(
     }
 
     Err(AppError::Message(
-        "Transcription failed after retries.".to_string(),
+        "Transcription did not finish after retries. Check network and API settings.".to_string(),
     ))
 }
 
@@ -2747,7 +2755,8 @@ async fn format_transcript(
                         continue;
                     }
                     return Err(AppError::Message(format!(
-                        "Formatting failed ({status}): {body}"
+                        "Polishing API returned {status}: {}",
+                        summarize_http_body(&body)
                     )));
                 }
 
@@ -2758,7 +2767,10 @@ async fn format_transcript(
                     .map(|c| c.message.content.trim().to_string())
                     .filter(|s| !s.is_empty())
                     .ok_or_else(|| {
-                        AppError::Message("No formatter output text received".to_string())
+                        AppError::Message(
+                            "Polishing returned no text. Disable polishing and try again."
+                                .to_string(),
+                        )
                     })?;
                 if formatter_output_passes_safety_check(transcript, &content) {
                     return Ok(FormatterResult {
@@ -2784,7 +2796,7 @@ async fn format_transcript(
     }
 
     Err(AppError::Message(
-        "Formatting failed after retries.".to_string(),
+        "Polishing did not finish after retries. Disable polishing and try again.".to_string(),
     ))
 }
 

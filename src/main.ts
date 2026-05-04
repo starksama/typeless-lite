@@ -80,6 +80,8 @@ type SettingsSection = 'general' | 'shortcuts' | 'ai' | 'privacy';
 type StatusBannerTone = 'ready' | 'recording' | 'processing' | 'issue';
 type AppToastTone = 'success' | 'error';
 type TranscriptRowActionMode = 'button' | 'indicator';
+type ThemePreference = 'system' | 'light' | 'dark';
+type ResolvedTheme = 'light' | 'dark';
 
 const PLATFORM_LABEL_SOURCE =
   (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData?.platform ||
@@ -182,6 +184,10 @@ const micLevelValueEl = document.querySelector<HTMLSpanElement>('#mic-level-valu
 const micLevelBarEl = document.querySelector<HTMLDivElement>('#mic-level-bar')!;
 const accessibilityStatusEl = document.querySelector<HTMLElement>('#accessibility-status')!;
 const microphoneStatusEl = document.querySelector<HTMLElement>('#microphone-status')!;
+const settingsAccessibilityCardEl = document.querySelector<HTMLElement>('#settings-accessibility-card')!;
+const settingsMicrophoneCardEl = document.querySelector<HTMLElement>('#settings-microphone-card')!;
+const settingsAccessibilityGuidanceEl = document.querySelector<HTMLParagraphElement>('#settings-accessibility-guidance')!;
+const settingsMicrophoneGuidanceEl = document.querySelector<HTMLParagraphElement>('#settings-microphone-guidance')!;
 const settingsRuntimeStatusEl = document.querySelector<HTMLElement>('#settings-runtime-status')!;
 const settingsAccessibilityStatusEl = document.querySelector<HTMLElement>('#settings-accessibility-status')!;
 const settingsMicrophoneStatusEl = document.querySelector<HTMLElement>('#settings-microphone-status')!;
@@ -213,6 +219,7 @@ const skipFormatterInTerminalsInput = document.querySelector<HTMLInputElement>('
 const includeClipboardContextInput = document.querySelector<HTMLInputElement>('#includeClipboardContext')!;
 const playSoundCuesInput = document.querySelector<HTMLInputElement>('#playSoundCues')!;
 const apiBaseUrlInput = document.querySelector<HTMLInputElement>('#apiBaseUrl')!;
+const themeModeInput = document.querySelector<HTMLSelectElement>('#themeMode')!;
 const recordingModeInput = document.querySelector<HTMLSelectElement>('#recordingMode')!;
 const languageInput = document.querySelector<HTMLSelectElement>('#language')!;
 const holdHotkeyValidationEl = document.querySelector<HTMLParagraphElement>('#hold-hotkey-validation')!;
@@ -271,12 +278,18 @@ const onboardingLanguageInput = document.querySelector<HTMLSelectElement>('#onbo
 const onboardingOpenAccessibilitySettingsBtn = document.querySelector<HTMLButtonElement>(
   '#onboarding-open-accessibility-settings-btn'
 )!;
+const onboardingCheckAccessibilityBtn = document.querySelector<HTMLButtonElement>(
+  '#onboarding-check-accessibility-btn'
+)!;
 const onboardingResetAccessibilityPermissionBtn = document.querySelector<HTMLButtonElement>(
   '#onboarding-reset-accessibility-permission-btn'
 )!;
+const onboardingCheckMicrophoneBtn = document.querySelector<HTMLButtonElement>('#onboarding-check-microphone-btn')!;
 const onboardingOpenMicrophoneSettingsBtn = document.querySelector<HTMLButtonElement>(
   '#onboarding-open-microphone-settings-btn'
 )!;
+const onboardingAccessibilityRowEl = document.querySelector<HTMLElement>('#onboarding-accessibility-row')!;
+const onboardingMicrophoneRowEl = document.querySelector<HTMLElement>('#onboarding-microphone-row')!;
 const onboardingAccessibilityStatusEl = document.querySelector<HTMLParagraphElement>(
   '#onboarding-accessibility-status'
 )!;
@@ -322,6 +335,7 @@ let activeHotkeyCaptureTarget: HotkeyCaptureTarget | null = null;
 const ONBOARDING_COMPLETED_KEY = `${APP_BRAND.storagePrefix}:onboarding-complete:v1`;
 const SIDEBAR_COLLAPSED_KEY = `${APP_BRAND.storagePrefix}:sidebar-collapsed:v1`;
 const SETTINGS_SECTION_KEY = `${APP_BRAND.storagePrefix}:settings-section:v1`;
+const THEME_MODE_KEY = `${APP_BRAND.storagePrefix}:theme-mode:v1`;
 const SETTINGS_SECTION_ORDER: SettingsSection[] = ['general', 'shortcuts', 'ai', 'privacy'];
 const WORKSPACE_TITLES: Record<WorkspaceTab, string> = {
   home: 'Home',
@@ -344,7 +358,7 @@ let lastAccessibilityStatus: AccessibilityPermissionStatus | null = null;
 let lastMicrophoneStatus: MicrophonePermissionStatus | null = null;
 let lastApiDiagnosticsStatus: ApiDiagnosticsStatus = {
   state: 'not_run',
-  message: 'Not run yet.',
+  message: '',
   updated_at_ms: null
 };
 let togglePendingAction: 'starting' | 'stopping' | null = null;
@@ -352,12 +366,89 @@ let togglePendingTimeoutId: number | null = null;
 let historyCopyFeedbackTimeoutId: number | null = null;
 let appToastTimeoutId: number | null = null;
 let lastDebugLogLines: string[] = [];
+let lastRenderedRuntimeState: Pick<RuntimeStatus, 'is_recording' | 'is_processing' | 'last_message'> | null = null;
+const systemThemeQuery = window.matchMedia('(prefers-color-scheme: light)');
+
+function isThemePreference(value: string | null): value is ThemePreference {
+  return value === 'system' || value === 'light' || value === 'dark';
+}
+
+function readThemePreference(): ThemePreference {
+  const stored = localStorage.getItem(THEME_MODE_KEY);
+  return isThemePreference(stored) ? stored : 'system';
+}
+
+function resolveTheme(preference: ThemePreference): ResolvedTheme {
+  if (preference === 'system') {
+    return systemThemeQuery.matches ? 'light' : 'dark';
+  }
+  return preference;
+}
+
+function applyThemePreference(preference: ThemePreference): void {
+  const resolvedTheme = resolveTheme(preference);
+  document.documentElement.dataset.theme = resolvedTheme;
+  document.documentElement.dataset.themePreference = preference;
+  document.documentElement.style.colorScheme = resolvedTheme;
+  themeModeInput.value = preference;
+}
+
+function setupThemePreference(): void {
+  applyThemePreference(readThemePreference());
+  themeModeInput.addEventListener('change', () => {
+    const preference = isThemePreference(themeModeInput.value) ? themeModeInput.value : 'system';
+    localStorage.setItem(THEME_MODE_KEY, preference);
+    applyThemePreference(preference);
+  });
+  systemThemeQuery.addEventListener('change', () => {
+    if (readThemePreference() === 'system') {
+      applyThemePreference('system');
+    }
+  });
+}
+
+type PermissionUiState = 'checking' | 'enabled' | 'needs-access' | 'blocked' | 'unsupported';
+
+function permissionUiState(status: AccessibilityPermissionStatus | MicrophonePermissionStatus | null): PermissionUiState {
+  if (!status) return 'checking';
+  if (!status.is_supported) return 'unsupported';
+  if (status.is_granted) return 'enabled';
+  if (status.status === 'denied' || status.status === 'restricted') return 'blocked';
+  return 'needs-access';
+}
+
+function setPermissionUiState(
+  element: HTMLElement,
+  status: AccessibilityPermissionStatus | MicrophonePermissionStatus | null
+): void {
+  element.dataset.permissionState = permissionUiState(status);
+}
+
+function accessibilityGuidance(status: AccessibilityPermissionStatus | null): string {
+  if (!status) return 'Click Check again to read macOS access.';
+  if (!status.is_supported) return 'Accessibility setup is only available on macOS.';
+  if (status.is_granted) return 'Ready to insert text into the focused app.';
+  return 'Open Accessibility, turn Keylesss on, then click Check again.';
+}
+
+function microphoneGuidance(status: MicrophonePermissionStatus | null): string {
+  if (!status) return 'Click Check again to read macOS access.';
+  if (!status.is_supported) return 'Microphone setup is only available on macOS.';
+  if (status.is_granted) return 'Ready to record.';
+  if (status.status === 'not_determined') return 'Click Allow to show the macOS microphone prompt.';
+  if (status.status === 'denied') return 'Open Microphone, turn Keylesss on, then click Check again.';
+  if (status.status === 'restricted') return 'Microphone is restricted by macOS policy.';
+  return 'Allow microphone access, then click Check again.';
+}
 
 function setAccessibilityStatusSummary(message: string, clearStructured = false): void {
   accessibilityStatusEl.textContent = message;
   settingsAccessibilityStatusEl.textContent = message;
   if (clearStructured) {
     lastAccessibilityStatus = null;
+    settingsAccessibilityGuidanceEl.textContent = accessibilityGuidance(null);
+    setPermissionUiState(settingsAccessibilityCardEl, null);
+    setPermissionUiState(onboardingAccessibilityRowEl, null);
   }
 }
 
@@ -366,11 +457,14 @@ function setMicrophoneStatusSummary(message: string, clearStructured = false): v
   settingsMicrophoneStatusEl.textContent = message;
   if (clearStructured) {
     lastMicrophoneStatus = null;
+    settingsMicrophoneGuidanceEl.textContent = microphoneGuidance(null);
+    setPermissionUiState(settingsMicrophoneCardEl, null);
+    setPermissionUiState(onboardingMicrophoneRowEl, null);
   }
 }
 
 function apiDiagnosticsSummaryLabel(state: ApiDiagnosticsStatus['state']): string {
-  if (state === 'testing') return 'Testing API...';
+  if (state === 'testing') return 'Checking API';
   if (state === 'passed') return 'API ok';
   if (state === 'failed') return 'API failed';
   return '';
@@ -395,7 +489,8 @@ function applyBranding(): void {
   document.title = APP_BRAND.displayName;
   sidebarBrandNameEl.textContent = APP_BRAND.displayName;
   onboardingTitleEl.textContent = `Welcome to ${APP_BRAND.displayName}`;
-  onboardingPermissionsCopyEl.textContent = 'Microphone access comes from the macOS prompt; it cannot be added manually.';
+  onboardingPermissionsCopyEl.textContent =
+    'Complete both rows. Microphone uses a macOS prompt; Accessibility opens System Settings.';
 }
 
 function renderWorkspaceHeader(tab: WorkspaceTab): void {
@@ -410,7 +505,7 @@ function inferStatusBannerPresentation(message: string): { tone: StatusBannerTon
   if (lastRuntimeStatus?.is_processing) {
     return { tone: 'processing', label: 'Processing' };
   }
-  if (normalized.includes('setup incomplete')) {
+  if (normalized.includes('setup needed')) {
     return { tone: 'issue', label: 'Setup' };
   }
   if (
@@ -462,7 +557,7 @@ function setApiDiagnosticsStatus(state: ApiDiagnosticsStatus['state'], message: 
     message,
     updated_at_ms: Date.now()
   };
-  settingsApiTestStatusEl.textContent = apiDiagnosticsSummaryLabel(state);
+  settingsApiTestStatusEl.textContent = state === 'failed' ? message : apiDiagnosticsSummaryLabel(state);
   settingsApiTestStatusEl.classList.toggle('hidden', state === 'not_run');
   settingsApiTestStatusEl.classList.toggle('status-copy-success', state === 'passed');
   settingsApiTestStatusEl.classList.toggle('status-copy-error', state === 'failed');
@@ -706,14 +801,14 @@ function syncPermissionSetupBanner(): void {
   const wasSetupAction = statusBannerEl.dataset.action === 'setup';
 
   if (missing.length > 0 && !lastRuntimeStatus?.is_recording && !lastRuntimeStatus?.is_processing) {
-    statusEl.textContent = `Setup incomplete: ${missing.join(' + ')}`;
+    statusEl.textContent = `Setup needed: ${missing.join(' and ')}`;
     setStatusBannerTone('issue', 'Setup');
     setStatusBannerActionable(true);
     return;
   }
 
   setStatusBannerActionable(false);
-  if (wasSetupAction && statusEl.textContent?.trim().startsWith('Setup incomplete')) {
+  if (wasSetupAction && statusEl.textContent?.trim().startsWith('Setup needed')) {
     const restored = lastRuntimeStatus?.last_message?.trim() || 'Ready';
     statusEl.textContent = restored;
     setStatusBannerTone(inferStatusBannerPresentation(restored).tone, inferStatusBannerPresentation(restored).label);
@@ -827,10 +922,10 @@ function normalizeApiBaseUrlInput(input: string): string {
 function validateOnboardingApiKey(apiKey: string): string | null {
   const trimmed = apiKey.trim();
   if (!trimmed) {
-    return 'API key is required.';
+    return 'Add your OpenAI API key.';
   }
   if (!trimmed.startsWith('sk-')) {
-    return 'API key should start with "sk-".';
+    return 'Use an OpenAI key that starts with "sk-".';
   }
   return null;
 }
@@ -839,7 +934,7 @@ function validateOnboardingApiBaseUrl(baseUrl: string): { error: string | null; 
   const trimmed = baseUrl.trim();
   if (!trimmed) {
     return {
-      error: 'API base URL is required.',
+      error: 'Add an API base URL.',
       suggestion: 'https://api.openai.com/v1'
     };
   }
@@ -852,21 +947,21 @@ function validateOnboardingApiBaseUrl(baseUrl: string): { error: string | null; 
     parsed = new URL(withProtocol);
   } catch {
     return {
-      error: 'Enter a valid URL like https://api.openai.com/v1.',
+      error: 'Use a full URL, for example https://api.openai.com/v1.',
       suggestion
     };
   }
 
   if (!['http:', 'https:'].includes(parsed.protocol)) {
     return {
-      error: 'URL must start with http:// or https://.',
+      error: 'Start the URL with https:// or http://.',
       suggestion
     };
   }
 
   if (!parsed.hostname) {
     return {
-      error: 'URL must include a host name.',
+      error: 'Add the API host name.',
       suggestion
     };
   }
@@ -904,9 +999,9 @@ function validateOnboardingApiStep(): string | null {
   if (baseUrlValidation.error) {
     setOnboardingApiBaseUrlValidation(baseUrlValidation.error, true);
   } else if (baseUrlValidation.suggestion) {
-    setOnboardingApiBaseUrlValidation('URL works. Use "Fix URL format" to normalize.', false);
+    setOnboardingApiBaseUrlValidation('URL can be normalized before saving.', false);
   } else {
-    setOnboardingApiBaseUrlValidation('API base URL looks good.', false);
+    setOnboardingApiBaseUrlValidation('API base URL ready.', false);
   }
 
   return keyError || baseUrlValidation.error;
@@ -1021,7 +1116,7 @@ function validateHotkey(hotkey: string): string | null {
 
   const duplicateModifier = modifiers.find((modifier, index) => modifiers.indexOf(modifier) !== index);
   if (duplicateModifier) {
-    return `Duplicate modifier "${duplicateModifier}". Use each modifier once.`;
+    return `Remove duplicate ${duplicateModifier}. Use each modifier once.`;
   }
 
   if (parts.some((part) => part === 'Fn' || part.toLowerCase() === 'fn')) {
@@ -1029,7 +1124,7 @@ function validateHotkey(hotkey: string): string | null {
   }
 
   if (nonModifiers.length === 0) {
-    return 'Modifier-only shortcuts are not supported here yet. Use one key with one or two modifiers, or use a single F key.';
+    return 'Add one regular key, or use a single F key.';
   }
 
   if (nonModifiers.length > 1) {
@@ -1037,7 +1132,7 @@ function validateHotkey(hotkey: string): string | null {
   }
 
   if (!canonicalizeNonModifierToken(nonModifiers[0])) {
-    return `Unsupported key "${nonModifiers[0]}". Use a real key like A, 1, Space, or F8.`;
+    return `Use a supported key instead of "${nonModifiers[0]}": A, 1, Space, or F8.`;
   }
 
   const primaryKey = nonModifiers[0];
@@ -1317,14 +1412,14 @@ function setRecordingActionLabels(
   pendingAction: 'starting' | 'stopping' | null = null
 ): void {
   if (pendingAction === 'starting') {
-    toggleBtn.textContent = 'Starting...';
-    homeToggleBtn.textContent = 'Starting...';
+    toggleBtn.textContent = 'Starting';
+    homeToggleBtn.textContent = 'Starting';
     return;
   }
 
   if (pendingAction === 'stopping') {
-    toggleBtn.textContent = 'Stopping...';
-    homeToggleBtn.textContent = 'Stopping...';
+    toggleBtn.textContent = 'Stopping';
+    homeToggleBtn.textContent = 'Stopping';
     return;
   }
 
@@ -1333,19 +1428,43 @@ function setRecordingActionLabels(
   homeToggleBtn.textContent = label;
 }
 
+function runtimeStateChanged(status: RuntimeStatus): boolean {
+  return (
+    !lastRenderedRuntimeState ||
+    lastRenderedRuntimeState.is_recording !== status.is_recording ||
+    lastRenderedRuntimeState.is_processing !== status.is_processing ||
+    lastRenderedRuntimeState.last_message !== status.last_message
+  );
+}
+
+function renderMicLevel(status: RuntimeStatus): void {
+  const level = Math.max(0, Math.min(100, Math.round(status.mic_level || 0)));
+  micLevelValueEl.textContent = status.is_recording ? `${level}%` : '0%';
+  micLevelBarEl.style.width = `${status.is_recording ? level : 0}%`;
+}
+
 function renderStatus(status: RuntimeStatus): void {
   lastRuntimeStatus = status;
+  renderMicLevel(status);
+
+  if (!runtimeStateChanged(status)) {
+    return;
+  }
+
+  lastRenderedRuntimeState = {
+    is_recording: status.is_recording,
+    is_processing: status.is_processing,
+    last_message: status.last_message
+  };
+
+  document.body.classList.toggle('is-recording', status.is_recording);
+  document.body.classList.toggle('is-processing', status.is_processing);
   clearTogglePendingState(status.is_recording);
-  const state = runtimeStateLabel(status);
   const bannerPresentation = runtimeStatusBannerPresentation(status);
   statusEl.textContent = status.last_message;
   setStatusBannerTone(bannerPresentation.tone, bannerPresentation.label);
   setRecordingActionLabels(status.is_recording);
-
-  const level = Math.max(0, Math.min(100, Math.round(status.mic_level || 0)));
-  micLevelValueEl.textContent = status.is_recording ? `${level}%` : '0%';
-  micLevelBarEl.style.width = `${status.is_recording ? level : 0}%`;
-  settingsRuntimeStatusEl.textContent = state;
+  settingsRuntimeStatusEl.textContent = runtimeStateLabel(status);
   syncPermissionSetupBanner();
 }
 
@@ -1371,7 +1490,7 @@ function beginOptimisticToggleState(): boolean {
   setToggleButtonsDisabled(true);
   setRecordingActionLabels(nextAction === 'starting', nextAction);
   setStatusBannerTone('processing', nextAction === 'starting' ? 'Starting' : 'Stopping');
-  statusEl.textContent = nextAction === 'starting' ? 'Starting recording...' : 'Stopping recording...';
+  statusEl.textContent = nextAction === 'starting' ? 'Starting recording' : 'Stopping recording';
   togglePendingTimeoutId = window.setTimeout(() => {
     clearTogglePendingState();
   }, TOGGLE_PENDING_TIMEOUT_MS);
@@ -1389,14 +1508,14 @@ async function requestToggleRecording(): Promise<void> {
     if (lastRuntimeStatus) {
       renderStatus(lastRuntimeStatus);
     }
-    statusEl.textContent = `Toggle failed: ${String(error)}`;
+    statusEl.textContent = `Recording could not start or stop: ${String(error)}`;
   }
 }
 
 function renderFastModeState(formatEnabled: boolean): void {
   const polishingEnabled = formatEnabled;
   homeFastModeStateEl.textContent = polishingEnabled ? 'ON' : 'OFF';
-  homeFastModeBtn.textContent = polishingEnabled ? 'Turn polishing Off' : 'Turn polishing On';
+  homeFastModeBtn.textContent = polishingEnabled ? 'Disable polishing' : 'Enable polishing';
 }
 
 function renderAccessibilityStatus(status: AccessibilityPermissionStatus): void {
@@ -1407,6 +1526,8 @@ function renderAccessibilityStatus(status: AccessibilityPermissionStatus): void 
       : 'Needs access'
     : 'Unsupported';
   setAccessibilityStatusSummary(label);
+  settingsAccessibilityGuidanceEl.textContent = accessibilityGuidance(status);
+  setPermissionUiState(settingsAccessibilityCardEl, status);
   renderOnboardingPermissionStatuses();
   syncPermissionSetupBanner();
 }
@@ -1421,32 +1542,45 @@ function renderMicrophoneStatus(status: MicrophonePermissionStatus): void {
         : 'Needs access'
     : 'Unsupported';
   setMicrophoneStatusSummary(label);
+  settingsMicrophoneGuidanceEl.textContent = microphoneGuidance(status);
+  setPermissionUiState(settingsMicrophoneCardEl, status);
+  const microphoneActionLabel = status.status === 'not_determined' ? 'Request access' : 'Open Microphone';
+  openMicrophoneSettingsBtn.textContent = status.is_granted ? 'Allowed' : microphoneActionLabel;
+  openMicrophoneSettingsBtn.disabled = status.is_granted || !status.is_supported;
   renderOnboardingPermissionStatuses();
   syncPermissionSetupBanner();
 }
 
 function onboardingAccessibilityLabel(status: AccessibilityPermissionStatus | null): string {
-  if (!status) return 'Checking...';
-  if (!status.is_supported) return 'Unsupported on this platform.';
-  if (status.is_granted) return 'Enabled';
-  return 'Needs access. Turn Keylesss on in System Settings.';
+  if (!status) return 'Checking';
+  if (!status.is_supported) return 'Accessibility setup is only available on macOS.';
+  if (status.is_granted) return 'Enabled. Continue setup.';
+  return 'Open Accessibility, turn Keylesss on, then click Check again.';
 }
 
 function onboardingMicrophoneLabel(status: MicrophonePermissionStatus | null): string {
-  if (!status) return 'Checking...';
-  if (!status.is_supported) return 'Unsupported on this platform.';
-  if (status.is_granted) return 'Enabled';
-  if (status.status === 'not_determined') return 'Click Allow. macOS will add Keylesss after the prompt.';
-  if (status.status === 'denied') return 'Open Settings and turn Keylesss on.';
-  if (status.status === 'restricted') return 'Restricted by macOS.';
-  return 'Needs access';
+  if (!status) return 'Checking';
+  if (!status.is_supported) return 'Microphone setup is only available on macOS.';
+  if (status.is_granted) return 'Enabled. Continue setup.';
+  if (status.status === 'not_determined') return 'Click Allow to show the macOS microphone prompt.';
+  if (status.status === 'denied') return 'Open Microphone, turn Keylesss on, then click Check again.';
+  if (status.status === 'restricted') return 'Microphone is restricted by macOS policy.';
+  return 'Allow microphone access, then click Check again.';
 }
 
 function renderOnboardingPermissionStatuses(): void {
+  setPermissionUiState(onboardingAccessibilityRowEl, lastAccessibilityStatus);
+  setPermissionUiState(onboardingMicrophoneRowEl, lastMicrophoneStatus);
   onboardingAccessibilityStatusEl.textContent = onboardingAccessibilityLabel(lastAccessibilityStatus);
   onboardingMicrophoneStatusEl.textContent = onboardingMicrophoneLabel(lastMicrophoneStatus);
   onboardingResetAccessibilityPermissionBtn.hidden =
     !lastAccessibilityStatus || !lastAccessibilityStatus.is_supported || lastAccessibilityStatus.is_granted;
+  onboardingOpenAccessibilitySettingsBtn.disabled =
+    Boolean(lastAccessibilityStatus && (!lastAccessibilityStatus.is_supported || lastAccessibilityStatus.is_granted));
+  onboardingOpenMicrophoneSettingsBtn.textContent =
+    lastMicrophoneStatus?.status === 'not_determined' ? 'Allow' : 'Open Microphone';
+  onboardingOpenMicrophoneSettingsBtn.disabled =
+    Boolean(lastMicrophoneStatus && (!lastMicrophoneStatus.is_supported || lastMicrophoneStatus.is_granted));
 }
 
 async function checkAndRenderAccessibilityStatus(): Promise<AccessibilityPermissionStatus> {
@@ -1495,8 +1629,13 @@ async function openAccessibilitySettingsFromUi(button: HTMLButtonElement): Promi
     syncPermissionSetupBanner();
   } catch (error) {
     setAccessibilityStatusSummary('Open failed');
+    statusEl.textContent =
+      'Could not open Accessibility. Open System Settings > Privacy & Security > Accessibility.';
   } finally {
-    button.disabled = false;
+    button.disabled = Boolean(
+      lastAccessibilityStatus && (!lastAccessibilityStatus.is_supported || lastAccessibilityStatus.is_granted)
+    );
+    renderOnboardingPermissionStatuses();
   }
 }
 
@@ -1507,7 +1646,7 @@ async function resetAccessibilityPermissionFromUi(button: HTMLButtonElement): Pr
     statusEl.textContent = resetMessage;
     await openAccessibilitySettingsFromUi(button);
   } catch (error) {
-    statusEl.textContent = `Reset failed: ${String(error)}`;
+    statusEl.textContent = `Reset did not finish: ${String(error)}`;
   } finally {
     button.disabled = false;
   }
@@ -1515,7 +1654,7 @@ async function resetAccessibilityPermissionFromUi(button: HTMLButtonElement): Pr
 
 async function openMicrophoneSettingsFromUi(button: HTMLButtonElement): Promise<void> {
   button.disabled = true;
-  setMicrophoneStatusSummary('Requesting...');
+  setMicrophoneStatusSummary('Requesting');
   try {
     const permissionStatus = await invoke<MicrophonePermissionStatus>('request_microphone_permission');
     renderMicrophoneStatus(permissionStatus);
@@ -1525,7 +1664,7 @@ async function openMicrophoneSettingsFromUi(button: HTMLButtonElement): Promise<
     }
 
     if (permissionStatus.status === 'not_determined') {
-      statusEl.textContent = 'Click Allow and accept the macOS prompt. Microphone has no manual add button.';
+      statusEl.textContent = 'Click Allow in the macOS microphone prompt.';
       syncPermissionSetupBanner();
       return;
     }
@@ -1536,24 +1675,38 @@ async function openMicrophoneSettingsFromUi(button: HTMLButtonElement): Promise<
     syncPermissionSetupBanner();
   } catch (error) {
     setMicrophoneStatusSummary('Open failed');
-    statusEl.textContent = `Microphone request failed: ${String(error)}`;
+    statusEl.textContent =
+      'Could not open Microphone. Open System Settings > Privacy & Security > Microphone.';
   } finally {
-    button.disabled = false;
+    button.disabled = Boolean(lastMicrophoneStatus && (!lastMicrophoneStatus.is_supported || lastMicrophoneStatus.is_granted));
+    renderOnboardingPermissionStatuses();
   }
 }
 
 async function ensureOnboardingPermissionsReady(): Promise<boolean> {
-  const { accessibility, microphone } = await refreshPermissionStatuses({
-    requestAccessibility: true,
-    requestMicrophone: true
-  });
+  let accessibility = await invoke<AccessibilityPermissionStatus>('check_accessibility_permission');
+  let microphone = await invoke<MicrophonePermissionStatus>('check_microphone_permission');
+
+  if (microphone.is_supported && !microphone.is_granted && microphone.status === 'not_determined') {
+    microphone = await invoke<MicrophonePermissionStatus>('request_microphone_permission');
+  }
+
+  if (accessibility.is_supported && !accessibility.is_granted) {
+    accessibility = await invoke<AccessibilityPermissionStatus>('request_accessibility_permission');
+  }
+
+  renderAccessibilityStatus(accessibility);
+  renderMicrophoneStatus(microphone);
 
   const missing = [];
   if (accessibility.is_supported && !accessibility.is_granted) missing.push('Accessibility');
   if (microphone.is_supported && !microphone.is_granted) missing.push('Microphone');
   if (missing.length === 0) return true;
 
-  statusEl.textContent = `Setup incomplete: ${missing.join(' + ')}`;
+  statusEl.textContent =
+    missing[0] === 'Accessibility'
+      ? 'Open Accessibility, turn Keylesss on, then click Check again.'
+      : microphoneGuidance(microphone);
   syncPermissionSetupBanner();
   if (accessibility.is_supported && !accessibility.is_granted) {
     await invoke<string>('open_accessibility_settings').catch(() => null);
@@ -1645,7 +1798,7 @@ function renderShortcutDirtyState(): void {
   shortcutListEls.toggle.classList.toggle('is-dirty', toggleDirty);
   shortcutDirtyIndicatorEl.classList.toggle('hidden', !anyDirty);
   saveSettingsBtn.classList.toggle('is-dirty', anyDirty);
-  saveSettingsBtn.textContent = anyDirty ? 'Save changes' : 'Save settings';
+  saveSettingsBtn.textContent = anyDirty ? 'Save changes' : 'Save';
 }
 
 function setSettingsHotkeyValidation(slot: ShortcutSlot, message: string, isError = false): void {
@@ -1836,7 +1989,7 @@ function setupHotkeyCapture(): void {
 async function saveSettingsPayload(payload: Settings, successMessage = 'Saved settings.'): Promise<boolean> {
   try {
     console.log('[settings] save attempt', payload);
-    statusEl.textContent = 'Saving settings...';
+    statusEl.textContent = 'Saving settings';
     await invoke('save_settings', { settings: payload });
     const [savedSettings, runtimeStatus] = await Promise.all([
       invoke<Settings>('get_settings'),
@@ -1878,7 +2031,7 @@ async function saveSettingsPayload(payload: Settings, successMessage = 'Saved se
       statusEl.textContent = errorText;
       return false;
     }
-    statusEl.textContent = `Failed to save settings: ${errorText}`;
+    statusEl.textContent = `Settings were not saved: ${errorText}`;
     return false;
   }
 }
@@ -2334,8 +2487,8 @@ async function loadInitial(): Promise<void> {
   renderDurableDraft(draft);
   lastDebugLogLines = await invoke<string[]>('get_debug_log');
 
-  setAccessibilityStatusSummary('Checking...');
-  setMicrophoneStatusSummary('Checking...');
+  setAccessibilityStatusSummary('Checking');
+  setMicrophoneStatusSummary('Checking');
   try {
     await refreshPermissionStatuses();
   } catch (error) {
@@ -2444,7 +2597,7 @@ draftRestoreDismissBtn.addEventListener('click', async () => {
     await invoke('clear_durable_draft');
     statusEl.textContent = 'Saved draft discarded.';
   } catch (error) {
-    statusEl.textContent = `Failed to discard draft: ${String(error)}`;
+    statusEl.textContent = `Draft was not discarded: ${String(error)}`;
   } finally {
     draftRestoreDismissBtn.disabled = false;
   }
@@ -2452,8 +2605,8 @@ draftRestoreDismissBtn.addEventListener('click', async () => {
 
 testApiBtn.addEventListener('click', async () => {
   testApiBtn.disabled = true;
-  statusEl.textContent = 'Testing API connection...';
-  setApiDiagnosticsStatus('testing', 'Running API connectivity test...');
+  statusEl.textContent = 'Checking API';
+  setApiDiagnosticsStatus('testing', 'Checking API');
   try {
     const result = await invoke<string>('test_api_connection');
     setApiDiagnosticsStatus('passed', result);
@@ -2469,7 +2622,7 @@ testApiBtn.addEventListener('click', async () => {
 
 checkAccessibilityBtn.addEventListener('click', async () => {
   checkAccessibilityBtn.disabled = true;
-  setAccessibilityStatusSummary('Checking...', true);
+  setAccessibilityStatusSummary('Checking', true);
   try {
     await checkAndRenderAccessibilityStatus();
   } catch (error) {
@@ -2489,7 +2642,7 @@ resetAccessibilityPermissionBtn.addEventListener('click', async () => {
 
 checkMicrophoneBtn.addEventListener('click', async () => {
   checkMicrophoneBtn.disabled = true;
-  setMicrophoneStatusSummary('Checking...', true);
+  setMicrophoneStatusSummary('Checking', true);
   try {
     await checkAndRenderMicrophoneStatus();
   } catch (error) {
@@ -2510,9 +2663,8 @@ reopenOnboardingBtn.addEventListener('click', () => {
 });
 
 onboardingSkipBtn.addEventListener('click', () => {
-  setOnboardingCompleted(true);
   hideOnboarding();
-  statusEl.textContent = 'Onboarding skipped. You can reopen it from Settings.';
+  statusEl.textContent = 'Setup paused. Reopen the setup guide from Settings.';
 });
 
 onboardingBackBtn.addEventListener('click', () => {
@@ -2568,8 +2720,32 @@ onboardingOpenAccessibilitySettingsBtn.addEventListener('click', async () => {
   await openAccessibilitySettingsFromUi(onboardingOpenAccessibilitySettingsBtn);
 });
 
+onboardingCheckAccessibilityBtn.addEventListener('click', async () => {
+  onboardingCheckAccessibilityBtn.disabled = true;
+  try {
+    await checkAndRenderAccessibilityStatus();
+  } catch (error) {
+    setAccessibilityStatusSummary('Check failed', true);
+    statusEl.textContent = 'Could not read Accessibility. Open System Settings and check manually.';
+  } finally {
+    onboardingCheckAccessibilityBtn.disabled = false;
+  }
+});
+
 onboardingResetAccessibilityPermissionBtn.addEventListener('click', async () => {
   await resetAccessibilityPermissionFromUi(onboardingResetAccessibilityPermissionBtn);
+});
+
+onboardingCheckMicrophoneBtn.addEventListener('click', async () => {
+  onboardingCheckMicrophoneBtn.disabled = true;
+  try {
+    await checkAndRenderMicrophoneStatus();
+  } catch (error) {
+    setMicrophoneStatusSummary('Check failed', true);
+    statusEl.textContent = 'Could not read Microphone access. Open System Settings and check manually.';
+  } finally {
+    onboardingCheckMicrophoneBtn.disabled = false;
+  }
 });
 
 onboardingOpenMicrophoneSettingsBtn.addEventListener('click', async () => {
@@ -2631,6 +2807,7 @@ listen<RuntimeStatus>('runtime-status', (event) => {
 setupTabs();
 setupSettingsSections();
 setupSidebar();
+setupThemePreference();
 setupHotkeyCapture();
 applyBranding();
 new MutationObserver(() => {
