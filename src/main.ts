@@ -395,7 +395,7 @@ function applyBranding(): void {
   document.title = APP_BRAND.displayName;
   sidebarBrandNameEl.textContent = APP_BRAND.displayName;
   onboardingTitleEl.textContent = `Welcome to ${APP_BRAND.displayName}`;
-  onboardingPermissionsCopyEl.textContent = `${APP_BRAND.displayName} needs Accessibility to insert text and Microphone to record speech.`;
+  onboardingPermissionsCopyEl.textContent = 'Microphone access comes from the macOS prompt; it cannot be added manually.';
 }
 
 function renderWorkspaceHeader(tab: WorkspaceTab): void {
@@ -1436,8 +1436,8 @@ function onboardingMicrophoneLabel(status: MicrophonePermissionStatus | null): s
   if (!status) return 'Checking...';
   if (!status.is_supported) return 'Unsupported on this platform.';
   if (status.is_granted) return 'Enabled';
-  if (status.status === 'not_determined') return 'Needs access. Click Allow Microphone.';
-  if (status.status === 'denied') return 'Needs access. Turn Keylesss on under Microphone.';
+  if (status.status === 'not_determined') return 'Click Allow. macOS will add Keylesss after the prompt.';
+  if (status.status === 'denied') return 'Open Settings and turn Keylesss on.';
   if (status.status === 'restricted') return 'Restricted by macOS.';
   return 'Needs access';
 }
@@ -1515,11 +1515,18 @@ async function resetAccessibilityPermissionFromUi(button: HTMLButtonElement): Pr
 
 async function openMicrophoneSettingsFromUi(button: HTMLButtonElement): Promise<void> {
   button.disabled = true;
+  setMicrophoneStatusSummary('Requesting...');
   try {
     const permissionStatus = await invoke<MicrophonePermissionStatus>('request_microphone_permission');
     renderMicrophoneStatus(permissionStatus);
     if (permissionStatus.is_granted) {
-      statusEl.textContent = permissionStatus.guidance;
+      statusEl.textContent = 'Microphone enabled.';
+      return;
+    }
+
+    if (permissionStatus.status === 'not_determined') {
+      statusEl.textContent = 'Click Allow and accept the macOS prompt. Microphone has no manual add button.';
+      syncPermissionSetupBanner();
       return;
     }
 
@@ -1529,6 +1536,7 @@ async function openMicrophoneSettingsFromUi(button: HTMLButtonElement): Promise<
     syncPermissionSetupBanner();
   } catch (error) {
     setMicrophoneStatusSummary('Open failed');
+    statusEl.textContent = `Microphone request failed: ${String(error)}`;
   } finally {
     button.disabled = false;
   }

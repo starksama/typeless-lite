@@ -920,14 +920,16 @@ fn microphone_status_from_macos_authorization(status: i32) -> MicrophonePermissi
             is_supported: true,
             is_granted: false,
             status: "not_determined".to_string(),
-            guidance: format!("Microphone permission has not been requested yet. Allow {app_name} when macOS asks."),
+            guidance: format!("Click Allow. macOS adds {app_name} to Microphone after the prompt."),
         },
         MACOS_AV_AUTHORIZATION_DENIED => MicrophonePermissionStatus {
             platform: "macOS".to_string(),
             is_supported: true,
             is_granted: false,
             status: "denied".to_string(),
-            guidance: format!("Microphone permission is denied. Open System Settings > Privacy & Security > Microphone and enable {app_name}."),
+            guidance: format!(
+                "Open System Settings > Privacy & Security > Microphone and turn {app_name} on."
+            ),
         },
         MACOS_AV_AUTHORIZATION_RESTRICTED => MicrophonePermissionStatus {
             platform: "macOS".to_string(),
@@ -964,7 +966,7 @@ fn open_microphone_settings() -> Result<String, String> {
         match Command::new("open").arg(url).status() {
             Ok(status) if status.success() => {
                 return Ok(format!(
-                    "Opened macOS Privacy settings. Enable Microphone for {app_name}."
+                    "Opened macOS Microphone settings. Turn {app_name} on if it appears."
                 ));
             }
             _ => {}
@@ -1770,7 +1772,10 @@ mod settings_compat_tests {
 
 #[cfg(all(test, target_os = "macos"))]
 mod permission_status_tests {
-    use super::accessibility_status_from_macos_trust;
+    use super::{
+        accessibility_status_from_macos_trust, microphone_status_from_macos_authorization,
+        MACOS_AV_AUTHORIZATION_DENIED, MACOS_AV_AUTHORIZATION_NOT_DETERMINED,
+    };
 
     #[test]
     fn accessibility_status_copy_stays_compact() {
@@ -1781,6 +1786,20 @@ mod permission_status_tests {
         let missing = accessibility_status_from_macos_trust(false);
         assert!(!missing.is_granted);
         assert_eq!(missing.guidance, "Needs access");
+    }
+
+    #[test]
+    fn microphone_status_copy_explains_prompt_before_settings() {
+        let not_requested =
+            microphone_status_from_macos_authorization(MACOS_AV_AUTHORIZATION_NOT_DETERMINED);
+        assert!(!not_requested.is_granted);
+        assert_eq!(not_requested.status, "not_determined");
+        assert!(not_requested.guidance.contains("after the prompt"));
+
+        let denied = microphone_status_from_macos_authorization(MACOS_AV_AUTHORIZATION_DENIED);
+        assert!(!denied.is_granted);
+        assert_eq!(denied.status, "denied");
+        assert!(denied.guidance.contains("turn"));
     }
 }
 
