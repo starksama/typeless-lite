@@ -367,6 +367,8 @@ let historyCopyFeedbackTimeoutId: number | null = null;
 let appToastTimeoutId: number | null = null;
 let lastDebugLogLines: string[] = [];
 let lastRenderedRuntimeState: Pick<RuntimeStatus, 'is_recording' | 'is_processing' | 'last_message'> | null = null;
+let appStatusMessage = 'Ready';
+let statusMessageSource: 'runtime' | 'ui' = 'runtime';
 const systemThemeQuery = window.matchMedia('(prefers-color-scheme: light)');
 
 function isThemePreference(value: string | null): value is ThemePreference {
@@ -536,9 +538,7 @@ function inferStatusBannerPresentation(message: string): { tone: StatusBannerTon
 }
 
 function syncStatusBannerFromText(): void {
-  const message = statusEl.textContent?.trim() || 'Ready.';
-  const presentation = inferStatusBannerPresentation(message);
-  setStatusBannerTone(presentation.tone, presentation.label);
+  renderStatusBanner();
 }
 
 function runtimeStatusBannerPresentation(status: RuntimeStatus): { tone: StatusBannerTone; label: string } {
@@ -549,6 +549,63 @@ function runtimeStatusBannerPresentation(status: RuntimeStatus): { tone: StatusB
     return { tone: 'processing', label: 'Processing' };
   }
   return inferStatusBannerPresentation(status.last_message);
+}
+
+function shouldShowIdleStatusMessage(message: string): boolean {
+  const normalized = message.trim().toLowerCase();
+  if (!normalized) return false;
+  return (
+    normalized.includes('could not') ||
+    normalized.includes('failed') ||
+    normalized.includes('not saved') ||
+    normalized.includes('did not finish') ||
+    normalized.includes('invalid') ||
+    normalized.includes('needs') ||
+    normalized.includes('denied') ||
+    normalized.includes('missing') ||
+    normalized.includes('setup') ||
+    normalized.includes('shortcut')
+  );
+}
+
+function renderStatusBanner(): void {
+  const runtime = lastRuntimeStatus;
+  const missing = missingPermissionLabels();
+  const runtimeIsActive = Boolean(runtime?.is_recording || runtime?.is_processing);
+
+  if (runtimeIsActive && runtime) {
+    const presentation = runtimeStatusBannerPresentation(runtime);
+    statusEl.textContent = runtime.last_message;
+    setStatusBannerTone(presentation.tone, presentation.label);
+    setStatusBannerActionable(false);
+    return;
+  }
+
+  if (missing.length > 0) {
+    statusEl.textContent = `Setup needed: ${missing.join(' and ')}`;
+    setStatusBannerTone('issue', 'Setup');
+    setStatusBannerActionable(true);
+    return;
+  }
+
+  const message =
+    statusMessageSource === 'ui' && shouldShowIdleStatusMessage(appStatusMessage) ? appStatusMessage.trim() : 'Ready';
+  const presentation = inferStatusBannerPresentation(message);
+  statusEl.textContent = message;
+  setStatusBannerTone(presentation.tone, presentation.label);
+  setStatusBannerActionable(false);
+}
+
+function setStatusMessage(message: string): void {
+  appStatusMessage = message;
+  statusMessageSource = 'ui';
+  renderStatusBanner();
+}
+
+function setRuntimeStatusMessage(message: string): void {
+  appStatusMessage = message;
+  statusMessageSource = 'runtime';
+  renderStatusBanner();
 }
 
 function setApiDiagnosticsStatus(state: ApiDiagnosticsStatus['state'], message: string): void {
@@ -797,22 +854,7 @@ function setStatusBannerActionable(actionable: boolean): void {
 }
 
 function syncPermissionSetupBanner(): void {
-  const missing = missingPermissionLabels();
-  const wasSetupAction = statusBannerEl.dataset.action === 'setup';
-
-  if (missing.length > 0 && !lastRuntimeStatus?.is_recording && !lastRuntimeStatus?.is_processing) {
-    statusEl.textContent = `Setup needed: ${missing.join(' and ')}`;
-    setStatusBannerTone('issue', 'Setup');
-    setStatusBannerActionable(true);
-    return;
-  }
-
-  setStatusBannerActionable(false);
-  if (wasSetupAction && statusEl.textContent?.trim().startsWith('Setup needed')) {
-    const restored = lastRuntimeStatus?.last_message?.trim() || 'Ready';
-    statusEl.textContent = restored;
-    setStatusBannerTone(inferStatusBannerPresentation(restored).tone, inferStatusBannerPresentation(restored).label);
-  }
+  renderStatusBanner();
 }
 
 function showPermissionOnboarding(): void {
@@ -1444,6 +1486,7 @@ function renderMicLevel(status: RuntimeStatus): void {
 }
 
 function renderStatus(status: RuntimeStatus): void {
+  const previousStatus = lastRuntimeStatus;
   lastRuntimeStatus = status;
   renderMicLevel(status);
 
@@ -1460,12 +1503,19 @@ function renderStatus(status: RuntimeStatus): void {
   document.body.classList.toggle('is-recording', status.is_recording);
   document.body.classList.toggle('is-processing', status.is_processing);
   clearTogglePendingState(status.is_recording);
-  const bannerPresentation = runtimeStatusBannerPresentation(status);
-  statusEl.textContent = status.last_message;
-  setStatusBannerTone(bannerPresentation.tone, bannerPresentation.label);
   setRecordingActionLabels(status.is_recording);
   settingsRuntimeStatusEl.textContent = runtimeStateLabel(status);
-  syncPermissionSetupBanner();
+  const runtimeBecameActive =
+    status.is_recording ||
+    status.is_processing ||
+    previousStatus?.is_recording ||
+    previousStatus?.is_processing ||
+    !previousStatus;
+  if (runtimeBecameActive || statusMessageSource === 'runtime') {
+    setRuntimeStatusMessage(status.last_message);
+  } else {
+    renderStatusBanner();
+  }
 }
 
 function setToggleButtonsDisabled(disabled: boolean): void {
@@ -1489,8 +1539,7 @@ function beginOptimisticToggleState(): boolean {
   togglePendingAction = nextAction;
   setToggleButtonsDisabled(true);
   setRecordingActionLabels(nextAction === 'starting', nextAction);
-  setStatusBannerTone('processing', nextAction === 'starting' ? 'Starting' : 'Stopping');
-  statusEl.textContent = nextAction === 'starting' ? 'Starting recording' : 'Stopping recording';
+  setStatusMessage(nextAction === 'starting' ? 'Starting recording' : 'Stopping recording');
   togglePendingTimeoutId = window.setTimeout(() => {
     clearTogglePendingState();
   }, TOGGLE_PENDING_TIMEOUT_MS);
@@ -1508,7 +1557,7 @@ async function requestToggleRecording(): Promise<void> {
     if (lastRuntimeStatus) {
       renderStatus(lastRuntimeStatus);
     }
-    statusEl.textContent = `Recording could not start or stop: ${String(error)}`;
+    setStatusMessage(`Recording could not start or stop: ${String(error)}`);
   }
 }
 
@@ -1619,18 +1668,17 @@ async function openAccessibilitySettingsFromUi(button: HTMLButtonElement): Promi
     const permissionStatus = await invoke<AccessibilityPermissionStatus>('request_accessibility_permission');
     renderAccessibilityStatus(permissionStatus);
     if (permissionStatus.is_granted) {
-      statusEl.textContent = 'Accessibility enabled.';
+      setStatusMessage('Accessibility enabled.');
       return;
     }
 
     const message = await invoke<string>('open_accessibility_settings');
-    statusEl.textContent = message;
+    setStatusMessage(message);
     setAccessibilityStatusSummary('Settings opened');
     syncPermissionSetupBanner();
   } catch (error) {
     setAccessibilityStatusSummary('Open failed');
-    statusEl.textContent =
-      'Could not open Accessibility. Open System Settings > Privacy & Security > Accessibility.';
+    setStatusMessage('Could not open Accessibility. Open System Settings > Privacy & Security > Accessibility.');
   } finally {
     button.disabled = Boolean(
       lastAccessibilityStatus && (!lastAccessibilityStatus.is_supported || lastAccessibilityStatus.is_granted)
@@ -1643,10 +1691,10 @@ async function resetAccessibilityPermissionFromUi(button: HTMLButtonElement): Pr
   button.disabled = true;
   try {
     const resetMessage = await invoke<string>('reset_accessibility_permission');
-    statusEl.textContent = resetMessage;
+    setStatusMessage(resetMessage);
     await openAccessibilitySettingsFromUi(button);
   } catch (error) {
-    statusEl.textContent = `Reset did not finish: ${String(error)}`;
+    setStatusMessage(`Reset did not finish: ${String(error)}`);
   } finally {
     button.disabled = false;
   }
@@ -1659,24 +1707,23 @@ async function openMicrophoneSettingsFromUi(button: HTMLButtonElement): Promise<
     const permissionStatus = await invoke<MicrophonePermissionStatus>('request_microphone_permission');
     renderMicrophoneStatus(permissionStatus);
     if (permissionStatus.is_granted) {
-      statusEl.textContent = 'Microphone enabled.';
+      setStatusMessage('Microphone enabled.');
       return;
     }
 
     if (permissionStatus.status === 'not_determined') {
-      statusEl.textContent = 'Click Allow in the macOS microphone prompt.';
+      setStatusMessage('Click Allow in the macOS microphone prompt.');
       syncPermissionSetupBanner();
       return;
     }
 
     const message = await invoke<string>('open_microphone_settings');
-    statusEl.textContent = message;
+    setStatusMessage(message);
     setMicrophoneStatusSummary('Settings opened');
     syncPermissionSetupBanner();
   } catch (error) {
     setMicrophoneStatusSummary('Open failed');
-    statusEl.textContent =
-      'Could not open Microphone. Open System Settings > Privacy & Security > Microphone.';
+    setStatusMessage('Could not open Microphone. Open System Settings > Privacy & Security > Microphone.');
   } finally {
     button.disabled = Boolean(lastMicrophoneStatus && (!lastMicrophoneStatus.is_supported || lastMicrophoneStatus.is_granted));
     renderOnboardingPermissionStatuses();
@@ -1703,10 +1750,11 @@ async function ensureOnboardingPermissionsReady(): Promise<boolean> {
   if (microphone.is_supported && !microphone.is_granted) missing.push('Microphone');
   if (missing.length === 0) return true;
 
-  statusEl.textContent =
+  setStatusMessage(
     missing[0] === 'Accessibility'
       ? 'Open Accessibility, turn Keylesss on, then click Check again.'
-      : microphoneGuidance(microphone);
+      : microphoneGuidance(microphone)
+  );
   syncPermissionSetupBanner();
   if (accessibility.is_supported && !accessibility.is_granted) {
     await invoke<string>('open_accessibility_settings').catch(() => null);
@@ -1989,7 +2037,7 @@ function setupHotkeyCapture(): void {
 async function saveSettingsPayload(payload: Settings, successMessage = 'Saved settings.'): Promise<boolean> {
   try {
     console.log('[settings] save attempt', payload);
-    statusEl.textContent = 'Saving settings';
+    setStatusMessage('Saving settings');
     await invoke('save_settings', { settings: payload });
     const [savedSettings, runtimeStatus] = await Promise.all([
       invoke<Settings>('get_settings'),
@@ -2009,7 +2057,7 @@ async function saveSettingsPayload(payload: Settings, successMessage = 'Saved se
     formatEnabledInput.checked = savedSettings.format_enabled;
     renderFastModeState(savedSettings.format_enabled);
     renderStatus(runtimeStatus);
-    statusEl.textContent = successMessage;
+    setStatusMessage(successMessage);
     renderShortcutDirtyState();
     return true;
   } catch (error) {
@@ -2028,10 +2076,10 @@ async function saveSettingsPayload(payload: Settings, successMessage = 'Saved se
         setSettingsHotkeyValidation('hold', errorText, true);
         setSettingsHotkeyValidation('toggle', errorText, true);
       }
-      statusEl.textContent = errorText;
+      setStatusMessage(errorText);
       return false;
     }
-    statusEl.textContent = `Settings were not saved: ${errorText}`;
+    setStatusMessage(`Settings were not saved: ${errorText}`);
     return false;
   }
 }
@@ -2039,7 +2087,7 @@ async function saveSettingsPayload(payload: Settings, successMessage = 'Saved se
 function applyOnboardingSelectionsToSettingsForm(): string | null {
   const onboardingApiError = validateOnboardingApiStep();
   if (onboardingApiError) {
-    statusEl.textContent = onboardingApiError;
+    setStatusMessage(onboardingApiError);
     onboardingStepIndex = onboardingStepOrder.indexOf('api');
     updateOnboardingStep();
     if (validateOnboardingApiKey(onboardingApiKeyInput.value)) {
@@ -2053,7 +2101,7 @@ function applyOnboardingSelectionsToSettingsForm(): string | null {
   const onboardingHotkey = normalizeHotkeyInput(onboardingHotkeyInput.value);
   const onboardingHotkeyError = validateHotkey(onboardingHotkey);
   if (onboardingHotkeyError) {
-    statusEl.textContent = onboardingHotkeyError;
+    setStatusMessage(onboardingHotkeyError);
     onboardingHotkeyInput.focus();
     return onboardingHotkeyError;
   }
@@ -2116,7 +2164,7 @@ function computeHistoryStats(entries: TranscriptHistoryEntry[]): {
 
 async function copyTextWithStatus(text: string, successMessage: string): Promise<void> {
   await invoke('copy_text_to_clipboard', { text });
-  statusEl.textContent = successMessage;
+  setStatusMessage(successMessage);
 }
 
 function appToastIconSvg(tone: AppToastTone): string {
@@ -2174,7 +2222,7 @@ async function handleHistoryEntryCopy(entry: TranscriptHistoryEntry): Promise<vo
     showAppToast('Copied');
   } catch (error) {
     showAppToast('Copy failed', 'error');
-    statusEl.textContent = `Copy failed: ${String(error)}`;
+    setStatusMessage(`Copy failed: ${String(error)}`);
   } finally {
     renderHistory(historyEntries);
   }
@@ -2271,7 +2319,7 @@ function createTranscriptRow(
       try {
         await copyTextWithStatus(entry.final_output, 'Transcript copied to clipboard.');
       } catch (error) {
-        statusEl.textContent = `Copy failed: ${String(error)}`;
+        setStatusMessage(`Copy failed: ${String(error)}`);
       } finally {
         copyBtn.disabled = false;
       }
@@ -2544,7 +2592,7 @@ form.addEventListener('submit', async (event) => {
       hotkeyError
     });
     focusShortcutSettings();
-    statusEl.textContent = hotkeyError;
+    setStatusMessage(hotkeyError);
     return;
   }
 
@@ -2585,7 +2633,7 @@ draftRestoreCopyBtn.addEventListener('click', async () => {
   try {
     await copyTextWithStatus(durableDraft.text, 'Recovered draft copied to clipboard.');
   } catch (error) {
-    statusEl.textContent = `Copy failed: ${String(error)}`;
+    setStatusMessage(`Copy failed: ${String(error)}`);
   } finally {
     draftRestoreCopyBtn.disabled = false;
   }
@@ -2595,9 +2643,9 @@ draftRestoreDismissBtn.addEventListener('click', async () => {
   draftRestoreDismissBtn.disabled = true;
   try {
     await invoke('clear_durable_draft');
-    statusEl.textContent = 'Saved draft discarded.';
+    setStatusMessage('Saved draft discarded.');
   } catch (error) {
-    statusEl.textContent = `Draft was not discarded: ${String(error)}`;
+    setStatusMessage(`Draft was not discarded: ${String(error)}`);
   } finally {
     draftRestoreDismissBtn.disabled = false;
   }
@@ -2605,16 +2653,16 @@ draftRestoreDismissBtn.addEventListener('click', async () => {
 
 testApiBtn.addEventListener('click', async () => {
   testApiBtn.disabled = true;
-  statusEl.textContent = 'Checking API';
+  setStatusMessage('Checking API');
   setApiDiagnosticsStatus('testing', 'Checking API');
   try {
     const result = await invoke<string>('test_api_connection');
     setApiDiagnosticsStatus('passed', result);
-    statusEl.textContent = result;
+    setStatusMessage(result);
   } catch (error) {
     const message = String(error);
     setApiDiagnosticsStatus('failed', message);
-    statusEl.textContent = message;
+    setStatusMessage(message);
   } finally {
     testApiBtn.disabled = false;
   }
@@ -2664,7 +2712,7 @@ reopenOnboardingBtn.addEventListener('click', () => {
 
 onboardingSkipBtn.addEventListener('click', () => {
   hideOnboarding();
-  statusEl.textContent = 'Setup paused. Reopen the setup guide from Settings.';
+  setStatusMessage('Setup paused. Reopen the setup guide from Settings.');
 });
 
 onboardingBackBtn.addEventListener('click', () => {
@@ -2681,7 +2729,7 @@ onboardingNextBtn.addEventListener('click', async () => {
   if (onboardingStepOrder[onboardingStepIndex] === 'api') {
     const apiError = validateOnboardingApiStep();
     if (apiError) {
-      statusEl.textContent = apiError;
+      setStatusMessage(apiError);
       if (validateOnboardingApiKey(onboardingApiKeyInput.value)) {
         onboardingApiKeyInput.focus();
       } else {
@@ -2726,7 +2774,7 @@ onboardingCheckAccessibilityBtn.addEventListener('click', async () => {
     await checkAndRenderAccessibilityStatus();
   } catch (error) {
     setAccessibilityStatusSummary('Check failed', true);
-    statusEl.textContent = 'Could not read Accessibility. Open System Settings and check manually.';
+    setStatusMessage('Could not read Accessibility. Open System Settings and check manually.');
   } finally {
     onboardingCheckAccessibilityBtn.disabled = false;
   }
@@ -2742,7 +2790,7 @@ onboardingCheckMicrophoneBtn.addEventListener('click', async () => {
     await checkAndRenderMicrophoneStatus();
   } catch (error) {
     setMicrophoneStatusSummary('Check failed', true);
-    statusEl.textContent = 'Could not read Microphone access. Open System Settings and check manually.';
+    setStatusMessage('Could not read Microphone access. Open System Settings and check manually.');
   } finally {
     onboardingCheckMicrophoneBtn.disabled = false;
   }
@@ -2760,10 +2808,10 @@ copyDiagnosticsBtn.addEventListener('click', async () => {
     await invoke('copy_text_to_clipboard', { text: buildDiagnosticsReport(lastDebugLogLines) });
     const copiedAt = new Date().toLocaleTimeString();
     setDiagnosticsCopyStatus(`Copied at ${copiedAt}.`, 'success');
-    statusEl.textContent = 'Diagnostics copied to clipboard.';
+    setStatusMessage('Diagnostics copied to clipboard.');
   } catch (error) {
     setDiagnosticsCopyStatus(`Copy failed: ${String(error)}`, 'error');
-    statusEl.textContent = `Copy failed: ${String(error)}`;
+    setStatusMessage(`Copy failed: ${String(error)}`);
   } finally {
     copyDiagnosticsBtn.disabled = false;
   }
@@ -2785,7 +2833,7 @@ statusBannerEl.addEventListener('keydown', (event) => {
 listen<TranscriptHistoryEntry[]>('transcript-history-updated', (event) => {
   renderHistory(event.payload);
 }).catch((error) => {
-  statusEl.textContent = `History listener failed: ${String(error)}`;
+  setStatusMessage(`History listener failed: ${String(error)}`);
 });
 
 historySearchInput.addEventListener('input', () => {
@@ -2795,13 +2843,13 @@ historySearchInput.addEventListener('input', () => {
 listen<DurableDraft | null>('durable-draft-updated', (event) => {
   renderDurableDraft(event.payload);
 }).catch((error) => {
-  statusEl.textContent = `Draft listener failed: ${String(error)}`;
+  setStatusMessage(`Draft listener failed: ${String(error)}`);
 });
 
 listen<RuntimeStatus>('runtime-status', (event) => {
   renderStatus(event.payload);
 }).catch((error) => {
-  statusEl.textContent = `Status listener failed: ${String(error)}`;
+  setStatusMessage(`Status listener failed: ${String(error)}`);
 });
 
 setupTabs();
@@ -2810,11 +2858,8 @@ setupSidebar();
 setupThemePreference();
 setupHotkeyCapture();
 applyBranding();
-new MutationObserver(() => {
-  syncStatusBannerFromText();
-}).observe(statusEl, { childList: true, characterData: true, subtree: true });
 syncStatusBannerFromText();
 
 loadInitial().catch((error) => {
-  statusEl.textContent = `Initialization failed: ${String(error)}`;
+  setStatusMessage(`Initialization failed: ${String(error)}`);
 });

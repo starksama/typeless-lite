@@ -1242,7 +1242,8 @@ fn set_status(
     mic_level: Option<u8>,
     message: String,
 ) {
-    let status = if let Ok(mut status) = state.runtime_status.lock() {
+    let (status, did_change_runtime_state) = if let Ok(mut status) = state.runtime_status.lock() {
+        let previous = status.clone();
         if let Some(v) = is_recording {
             status.is_recording = v;
         }
@@ -1253,11 +1254,24 @@ fn set_status(
             status.mic_level = v.min(100);
         }
         status.last_message = message;
-        status.clone()
+        let next = status.clone();
+        let did_change = previous.is_recording != next.is_recording
+            || previous.is_processing != next.is_processing
+            || previous.last_message != next.last_message;
+        (next, did_change)
     } else {
         return;
     };
 
+    if did_change_runtime_state {
+        debug_log_state(
+            state,
+            format!(
+                "runtime_status_changed recording={} processing={} message={}",
+                status.is_recording, status.is_processing, status.last_message
+            ),
+        );
+    }
     update_tray_status(app, &status);
     sync_overlay_window_visibility(app, &status);
     let _ = app.emit(APP_STATUS_EVENT, status);
@@ -1993,7 +2007,6 @@ fn register_shortcuts_strict(
             .map(|binding| binding.binding)
             .collect(),
     };
-
     Ok(())
 }
 
