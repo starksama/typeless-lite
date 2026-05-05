@@ -9,38 +9,15 @@
         color-scheme: dark;
         --overlay-blue: oklch(72% 0.145 255);
         --overlay-mint: oklch(73% 0.12 166);
-        --overlay-blue-border: oklch(72% 0.145 255 / 0.42);
-        --overlay-mint-border: oklch(73% 0.12 166 / 0.42);
-        --overlay-bg-top: oklch(21% 0.008 240 / 0.98);
-        --overlay-bg-bottom: oklch(15% 0.008 240 / 0.98);
-        --overlay-text: oklch(94% 0.006 240);
-        --overlay-muted: oklch(72% 0.01 240);
-        --overlay-border: oklch(86% 0.012 240 / 0.18);
-        --overlay-track: oklch(11% 0.006 240 / 0.72);
-        --overlay-track-mark: oklch(100% 0.003 240 / 0.07);
-        --overlay-accent: var(--overlay-mint);
-        --overlay-warning: oklch(70% 0.116 72);
-        --overlay-shadow: 0 14px 32px oklch(8% 0.012 240 / 0.28);
-        --overlay-sheen: oklch(100% 0.003 240 / 0.06);
+        --overlay-dot-dim: oklch(78% 0.012 240 / 0.32);
+        --overlay-level: 0;
       }
 
       :root[data-theme="light"] {
         color-scheme: light;
         --overlay-blue: oklch(54% 0.16 255);
         --overlay-mint: oklch(58% 0.13 166);
-        --overlay-blue-border: oklch(54% 0.16 255 / 0.42);
-        --overlay-mint-border: oklch(58% 0.13 166 / 0.42);
-        --overlay-bg-top: oklch(99% 0.003 240 / 0.99);
-        --overlay-bg-bottom: oklch(94% 0.004 240 / 0.99);
-        --overlay-text: oklch(20% 0.01 240);
-        --overlay-muted: oklch(48% 0.012 240);
-        --overlay-border: oklch(35% 0.012 240 / 0.14);
-        --overlay-track: oklch(91% 0.004 240);
-        --overlay-track-mark: oklch(20% 0.01 240 / 0.06);
-        --overlay-accent: var(--overlay-mint);
-        --overlay-warning: oklch(55% 0.112 72);
-        --overlay-shadow: 0 12px 28px oklch(18% 0.012 240 / 0.13);
-        --overlay-sheen: oklch(100% 0.003 240 / 0.68);
+        --overlay-dot-dim: oklch(22% 0.012 240 / 0.3);
       }
 
       html,
@@ -48,9 +25,8 @@
         margin: 0;
         width: 100%;
         height: 100%;
-        background: transparent;
         overflow: hidden;
-        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+        background: transparent;
         pointer-events: none;
       }
 
@@ -60,31 +36,22 @@
       }
 
       .overlay-shell {
-        display: flex;
-        align-items: center;
-        justify-content: center;
+        display: grid;
+        place-items: center;
         width: 100%;
         height: 100%;
       }
 
       .overlay-pill {
-        display: inline-flex;
-        align-items: center;
-        gap: 9px;
-        width: 100%;
-        height: 100%;
-        padding: 0 11px;
-        border-radius: 11px;
-        border: 1px solid var(--overlay-border);
-        background:
-          linear-gradient(180deg, var(--overlay-sheen), transparent 42%),
-          linear-gradient(180deg, var(--overlay-bg-top), var(--overlay-bg-bottom));
-        box-shadow: var(--overlay-shadow);
-        color: var(--overlay-text);
+        display: grid;
+        place-items: center;
+        width: 104px;
+        height: 22px;
         opacity: 0;
-        transform: translateY(4px) scale(0.99);
-        transition: opacity 140ms ease, transform 140ms ease;
-        box-sizing: border-box;
+        transform: translateY(3px) scale(0.98);
+        transition:
+          opacity 120ms ease,
+          transform 150ms cubic-bezier(0.22, 1, 0.36, 1);
       }
 
       .overlay-pill.is-visible {
@@ -92,83 +59,93 @@
         transform: translateY(0) scale(1);
       }
 
-      .overlay-pill[data-tone="recording"] {
-        border-color: var(--overlay-mint-border);
-      }
-
-      .overlay-pill[data-tone="processing"] {
-        border-color: var(--overlay-blue-border);
-      }
-
-      .overlay-mark {
-        position: relative;
-        width: 30px;
-        height: 22px;
-        flex: 0 0 auto;
-        display: grid;
-        grid-template-columns: 4px 4px 4px 1fr;
+      .overlay-dots {
+        display: flex;
         align-items: center;
-        gap: 4px;
+        justify-content: center;
+        gap: 7px;
+        width: 100%;
+        height: 100%;
       }
 
-      .overlay-mark span {
-        display: block;
+      .overlay-dot {
         width: 4px;
-        border-radius: 4px;
-        background: var(--overlay-blue);
-      }
-
-      .overlay-mark span:nth-child(1) {
-        height: 9px;
-        opacity: 0.78;
-      }
-
-      .overlay-mark span:nth-child(2) {
-        height: 16px;
-      }
-
-      .overlay-mark span:nth-child(3) {
-        height: 22px;
-        background: linear-gradient(180deg, var(--overlay-blue), var(--overlay-mint));
-      }
-
-      .overlay-mark-line {
         height: 4px;
-        width: 15px;
-        border-radius: 4px;
+        border-radius: 999px;
+        background: var(--overlay-dot-dim);
+        opacity: 0.42;
+        transform: translate3d(0, 0, 0) scale(0.78);
+        transition:
+          opacity 85ms linear,
+          transform 85ms cubic-bezier(0.22, 1, 0.36, 1),
+          background-color 120ms ease;
+      }
+
+      .overlay-pill[data-tone="recording"] .overlay-dot {
+        animation: dot-flow 1120ms linear infinite;
         background: var(--overlay-mint);
       }
 
-      .overlay-pill[data-tone="processing"] .overlay-mark-line {
-        background: var(--overlay-blue);
+      .overlay-pill[data-tone="recording"].has-speech .overlay-dot {
+        background: color-mix(in oklch, var(--overlay-mint) 86%, var(--overlay-blue));
       }
 
-      .overlay-label {
-        min-width: 66px;
-        font-size: 12px;
-        font-weight: 540;
-        letter-spacing: 0;
-        white-space: nowrap;
+      .overlay-dot:nth-child(2) {
+        animation-delay: -960ms;
       }
 
-      .overlay-meter {
+      .overlay-dot:nth-child(3) {
+        animation-delay: -800ms;
+      }
+
+      .overlay-dot:nth-child(4) {
+        animation-delay: -640ms;
+      }
+
+      .overlay-dot:nth-child(5) {
+        animation-delay: -480ms;
+      }
+
+      .overlay-dot:nth-child(6) {
+        animation-delay: -320ms;
+      }
+
+      .overlay-dot:nth-child(7) {
+        animation-delay: -160ms;
+      }
+
+      .overlay-spinner {
         display: none;
-        align-items: end;
-        gap: 3px;
-        height: 18px;
-        margin-left: auto;
+        width: 16px;
+        height: 16px;
+        border-radius: 999px;
+        border: 2px solid oklch(62% 0.012 240 / 0.18);
+        border-top-color: var(--overlay-blue);
+        animation: overlay-spin 760ms linear infinite;
       }
 
-      .overlay-pill[data-tone="recording"] .overlay-meter {
-        display: inline-flex;
+      .overlay-pill[data-tone="processing"] .overlay-dots {
+        display: none;
       }
 
-      .overlay-bar {
-        width: 3px;
-        min-height: 4px;
-        border-radius: 2px;
-        background: var(--overlay-accent);
-        transition: height 90ms ease;
+      .overlay-pill[data-tone="processing"] .overlay-spinner {
+        display: block;
+      }
+
+      @keyframes dot-flow {
+        0%,
+        100% {
+          opacity: 0.32;
+        }
+        42% {
+          opacity: 0.82;
+        }
+      }
+
+      @keyframes overlay-spin {
+        to {
+          transform: rotate(360deg);
+        }
       }
 
       @media (prefers-reduced-motion: reduce) {
@@ -183,20 +160,17 @@
   </head>
   <body>
     <div class="overlay-shell">
-      <div id="overlay-pill" class="overlay-pill is-visible" data-tone="recording" aria-hidden="false">
-        <div class="overlay-mark" aria-hidden="true">
-          <span></span>
-          <span></span>
-          <span></span>
-          <span class="overlay-mark-line"></span>
+      <div id="overlay-pill" class="overlay-pill" data-tone="idle" aria-hidden="true" aria-label="Ready">
+        <div class="overlay-dots" aria-hidden="true">
+          <span class="overlay-dot"></span>
+          <span class="overlay-dot"></span>
+          <span class="overlay-dot"></span>
+          <span class="overlay-dot"></span>
+          <span class="overlay-dot"></span>
+          <span class="overlay-dot"></span>
+          <span class="overlay-dot"></span>
         </div>
-        <div id="overlay-label" class="overlay-label">Recording</div>
-        <div id="overlay-meter" class="overlay-meter" aria-hidden="true">
-          <span class="overlay-bar"></span>
-          <span class="overlay-bar"></span>
-          <span class="overlay-bar"></span>
-          <span class="overlay-bar"></span>
-        </div>
+        <span class="overlay-spinner" aria-hidden="true"></span>
       </div>
     </div>
     <script type="module" src="/src/overlay.ts"></script>

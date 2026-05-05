@@ -27,6 +27,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use reqwest::multipart::{Form, Part};
 use serde::{Deserialize, Deserializer, Serialize};
 use tauri::{
+    image::Image,
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
     utils::config::Color,
@@ -39,25 +40,26 @@ const APP_STATUS_EVENT: &str = "runtime-status";
 const APP_CONFIG_JSON: &str = include_str!("../../app.config.json");
 const OVERLAY_WINDOW_LABEL: &str = "overlay";
 const TRAY_ID: &str = "main-tray";
+const TRAY_ICON_SIZE: usize = 18;
 const PRE_RECORDING_COPY_DELAY_MS: u64 = 80;
 const PRE_PASTE_DELAY_MS: u64 = 120;
 const TARGET_APP_REFOCUS_DELAY_MS: u64 = 120;
 const PASTE_RETRY_BACKOFF_MS: u64 = 45;
 const CLIPBOARD_RESTORE_DELAY_MS: u64 = 2_000;
-const OVERLAY_WINDOW_WIDTH: f64 = 214.0;
-const OVERLAY_WINDOW_HEIGHT: f64 = 44.0;
-const OVERLAY_WINDOW_BOTTOM_MARGIN: f64 = 28.0;
+const OVERLAY_WINDOW_WIDTH: f64 = 120.0;
+const OVERLAY_WINDOW_HEIGHT: f64 = 28.0;
+const OVERLAY_WINDOW_BOTTOM_MARGIN: f64 = 24.0;
 const FORMAT_CONTEXT_CLIPBOARD_MAX_CHARS: usize = 500;
 const TRANSCRIPTION_PROMPT_CONTEXT_MAX_CHARS: usize = 500;
 const TERMINAL_TYPE_CHUNK_SIZE: usize = 80;
 const MIN_RECORDING_MS: u128 = 400;
-const API_TEST_TIMEOUT_SECS: u64 = 6;
 const API_CLIENT_TIMEOUT_SECS: u64 = 30;
 const API_RETRY_MAX_ATTEMPTS: u32 = 3;
 const API_RETRY_BASE_BACKOFF_MS: u64 = 350;
 const TRANSCRIPT_HISTORY_LIMIT: usize = 500;
 const TRANSCRIPT_HISTORY_EVENT: &str = "transcript-history-updated";
 const DURABLE_DRAFT_EVENT: &str = "durable-draft-updated";
+const RECOVERED_RECORDINGS_DIR: &str = "failed-recordings";
 const HISTORY_ID_SEQUENCE_MASK: u64 = 0x3ff;
 const DEBUG_LOG_LIMIT: usize = 200;
 const MIC_METER_EMIT_INTERVAL_MS: u64 = 45;
@@ -206,7 +208,6 @@ impl Default for Settings {
 enum Earcon {
     Start,
     Success,
-    Error,
 }
 
 fn play_earcon_if_enabled(state: &State<'_, AppState>, earcon: Earcon) {
@@ -225,7 +226,6 @@ fn play_earcon(earcon: Earcon) {
     let sound_name = match earcon {
         Earcon::Start => "Hero",
         Earcon::Success => "Glass",
-        Earcon::Error => "Basso",
     };
     let sound_path = format!("/System/Library/Sounds/{sound_name}.aiff");
     thread::spawn(move || {
@@ -401,7 +401,7 @@ fn accessibility_permission_owner_label() -> String {
 #[cfg(target_os = "macos")]
 fn macos_runtime_identity_summary() -> String {
     format!(
-        "runtime_identity exe={} app_bundle={} dev_terminal_microphone={}",
+        "runtime_identity exe={} app_bundle={} unbundled_dev_runtime={}",
         macos_current_exe_path(),
         macos_running_from_app_bundle(),
         macos_unbundled_dev_runtime()
@@ -454,6 +454,15 @@ struct StoppedRecording {
     recording_mode: String,
     pre_recording_clipboard_context: Option<String>,
     insertion_target_app: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct CachedRecording {
+    wav_path: PathBuf,
+    metadata_path: PathBuf,
+    created_at_ms: u64,
+    recording_mode: String,
+    source_app: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -557,15 +566,6 @@ fn get_runtime_status(state: State<AppState>) -> RuntimeStatus {
             mic_level: 0,
             last_message: "State unavailable".to_string(),
         })
-}
-
-#[tauri::command]
-fn get_debug_log(state: State<AppState>) -> Vec<String> {
-    state
-        .debug_log
-        .lock()
-        .map(|entries| entries.clone())
-        .unwrap_or_default()
 }
 
 #[tauri::command]
@@ -734,60 +734,6 @@ fn save_settings(app: AppHandle, state: State<AppState>, settings: Settings) -> 
 #[tauri::command]
 fn toggle_recording(app: AppHandle, state: State<AppState>) -> Result<(), String> {
     toggle_recording_inner(&app, &state)
-}
-
-#[tauri::command]
-async fn test_api_connection(state: State<'_, AppState>) -> Result<String, String> {
-    let settings = state
-        .settings
-        .lock()
-        .map_err(|_| "Failed to access settings".to_string())?
-        .clone();
-
-    let api_key = settings.api_key.trim();
-    if api_key.is_empty() {
-        return Err("Add your OpenAI API key, save, then test again.".to_string());
-    }
-
-    let base_url = settings.api_base_url.trim().trim_end_matches('/');
-    if base_url.is_empty() {
-        return Err("Add an API base URL, for example https://api.openai.com/v1.".to_string());
-    }
-
-    let url = format!("{base_url}/models");
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(API_TEST_TIMEOUT_SECS))
-        .build()
-        .map_err(|e| format!("Failed to create HTTP client: {e}"))?;
-
-    let response = client
-        .get(&url)
-        .bearer_auth(api_key)
-        .send()
-        .await
-        .map_err(map_test_connection_error)?;
-
-    let status = response.status();
-    if status.is_success() {
-        return Ok("API ok.".to_string());
-    }
-
-    let body = response
-        .text()
-        .await
-        .unwrap_or_else(|_| "<no response body>".to_string());
-
-    match status.as_u16() {
-        401 => Err("API key rejected. Paste a valid key, save, then test again.".to_string()),
-        404 => Err(
-            "API base URL not found. Use https://api.openai.com/v1 or your provider's /v1 endpoint."
-                .to_string(),
-        ),
-        _ => Err(format!(
-            "API returned {status}: {}",
-            summarize_http_body(&body)
-        )),
-    }
 }
 
 #[tauri::command]
@@ -984,33 +930,11 @@ fn request_microphone_permission(state: State<AppState>) -> MicrophonePermission
     request_microphone_permission_status()
 }
 
-#[cfg(target_os = "macos")]
-fn dev_terminal_microphone_permission_status() -> MicrophonePermissionStatus {
-    let terminal_name = terminal_permission_owner_label();
-    MicrophonePermissionStatus {
-        platform: "macOS".to_string(),
-        is_supported: true,
-        is_granted: true,
-        status: "dev_terminal".to_string(),
-        guidance: format!("Dev mode: {terminal_name} owns recording access."),
-    }
-}
-
 fn current_microphone_permission_status() -> MicrophonePermissionStatus {
-    #[cfg(target_os = "macos")]
-    if macos_unbundled_dev_runtime() {
-        return dev_terminal_microphone_permission_status();
-    }
-
     microphone_status_from_macos_authorization(unsafe { verba_microphone_authorization_status() })
 }
 
 fn request_microphone_permission_status() -> MicrophonePermissionStatus {
-    #[cfg(target_os = "macos")]
-    if macos_unbundled_dev_runtime() {
-        return dev_terminal_microphone_permission_status();
-    }
-
     let status = unsafe { verba_microphone_authorization_status() };
     if status == MACOS_AV_AUTHORIZATION_NOT_DETERMINED {
         let granted = unsafe { verba_request_microphone_access() };
@@ -1152,6 +1076,81 @@ fn durable_draft_path(app: &AppHandle) -> Result<PathBuf, AppError> {
         .map_err(|e| AppError::Message(format!("Failed resolving config dir: {e}")))?;
     fs::create_dir_all(&dir)?;
     Ok(dir.join("durable_draft.json"))
+}
+
+fn recovered_recordings_dir(app: &AppHandle) -> Result<PathBuf, AppError> {
+    let dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|e| AppError::Message(format!("Failed resolving config dir: {e}")))?
+        .join(RECOVERED_RECORDINGS_DIR);
+    fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
+fn recording_cache_stem(created_at_ms: u64, sequence: u64) -> String {
+    format!("recording-{created_at_ms}-{sequence:03}")
+}
+
+fn write_cached_recording_metadata(
+    cached: &CachedRecording,
+    status: &str,
+    error: Option<&str>,
+) -> Result<(), AppError> {
+    let wav_file = cached
+        .wav_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("recording.wav");
+    let data = serde_json::json!({
+        "created_at_ms": cached.created_at_ms,
+        "status": status,
+        "error": error,
+        "recording_mode": cached.recording_mode.as_str(),
+        "source_app": cached.source_app.as_deref(),
+        "wav_file": wav_file
+    });
+    fs::write(&cached.metadata_path, serde_json::to_vec_pretty(&data)?)?;
+    Ok(())
+}
+
+fn cache_recording_audio(
+    app: &AppHandle,
+    source_wav_path: &Path,
+    recording_mode: &str,
+    source_app: Option<&str>,
+) -> Result<CachedRecording, AppError> {
+    let dir = recovered_recordings_dir(app)?;
+    let created_at_ms = now_epoch_ms();
+    let sequence = HISTORY_ID_SEQUENCE.fetch_add(1, Ordering::Relaxed) & HISTORY_ID_SEQUENCE_MASK;
+    let stem = recording_cache_stem(created_at_ms, sequence);
+    let cached = CachedRecording {
+        wav_path: dir.join(format!("{stem}.wav")),
+        metadata_path: dir.join(format!("{stem}.json")),
+        created_at_ms,
+        recording_mode: normalize_recording_mode(recording_mode),
+        source_app: source_app.map(ToOwned::to_owned),
+    };
+    fs::copy(source_wav_path, &cached.wav_path)?;
+    write_cached_recording_metadata(&cached, "processing", None)?;
+    Ok(cached)
+}
+
+fn mark_cached_recording_failed(cached: &CachedRecording, error: &str) -> Result<(), AppError> {
+    write_cached_recording_metadata(cached, "failed", Some(error))
+}
+
+fn remove_cached_recording(cached: &CachedRecording) {
+    if let Err(error) = fs::remove_file(&cached.wav_path) {
+        if cached.wav_path.exists() {
+            eprintln!("Failed to remove cached recording audio: {error}");
+        }
+    }
+    if let Err(error) = fs::remove_file(&cached.metadata_path) {
+        if cached.metadata_path.exists() {
+            eprintln!("Failed to remove cached recording metadata: {error}");
+        }
+    }
 }
 
 fn load_durable_draft(app: &AppHandle) -> Option<DurableDraft> {
@@ -1308,19 +1307,6 @@ fn push_transcript_history_entry(
     emit_transcript_history(app, state);
 }
 
-fn map_test_connection_error(error: reqwest::Error) -> String {
-    if error.is_timeout() {
-        return format!(
-            "API timed out after {API_TEST_TIMEOUT_SECS}s. Check network/VPN and the API base URL."
-        );
-    }
-    if error.is_connect() || error.is_request() {
-        return "Could not reach the API host. Check internet connection and API base URL."
-            .to_string();
-    }
-    format!("API test could not finish: {error}")
-}
-
 fn summarize_http_body(body: &str) -> String {
     let trimmed = body.trim();
     if trimmed.is_empty() {
@@ -1419,13 +1405,52 @@ fn emit_mic_level(app: &AppHandle, mic_level: u8) {
     let _ = app.emit(APP_STATUS_EVENT, status.clone());
 }
 
+fn draw_tray_pixel(rgba: &mut [u8], x: usize, y: usize, alpha: u8) {
+    if x >= TRAY_ICON_SIZE || y >= TRAY_ICON_SIZE {
+        return;
+    }
+    let index = (y * TRAY_ICON_SIZE + x) * 4;
+    rgba[index] = 0;
+    rgba[index + 1] = 0;
+    rgba[index + 2] = 0;
+    rgba[index + 3] = alpha;
+}
+
+fn draw_tray_rect(rgba: &mut [u8], x: usize, y: usize, width: usize, height: usize, alpha: u8) {
+    for yy in y..y.saturating_add(height) {
+        for xx in x..x.saturating_add(width) {
+            draw_tray_pixel(rgba, xx, yy, alpha);
+        }
+    }
+}
+
+fn draw_tray_icon(active: bool, processing: bool) -> Image<'static> {
+    let mut rgba = vec![0; TRAY_ICON_SIZE * TRAY_ICON_SIZE * 4];
+    let alpha = if processing { 210 } else { 255 };
+
+    draw_tray_rect(&mut rgba, 4, 6, 2, 7, alpha);
+    draw_tray_rect(&mut rgba, 8, 3, 3, 12, alpha);
+    draw_tray_rect(&mut rgba, 13, 6, 4, 2, alpha);
+    draw_tray_rect(&mut rgba, 12, 10, 5, 2, alpha);
+
+    if active {
+        draw_tray_rect(&mut rgba, 14, 3, 3, 3, alpha);
+        draw_tray_rect(&mut rgba, 13, 14, 4, 2, alpha);
+    } else if processing {
+        draw_tray_rect(&mut rgba, 3, 14, 3, 2, alpha);
+        draw_tray_rect(&mut rgba, 13, 14, 3, 2, alpha);
+    }
+
+    Image::new_owned(rgba, TRAY_ICON_SIZE as u32, TRAY_ICON_SIZE as u32)
+}
+
 fn tray_state_label(status: &RuntimeStatus) -> &'static str {
     if status.is_recording {
         "Recording"
     } else if status.is_processing {
         "Processing"
     } else {
-        "Idle"
+        "Ready"
     }
 }
 
@@ -1437,10 +1462,15 @@ fn update_tray_status(app: &AppHandle, status: &RuntimeStatus) {
     let state_label = tray_state_label(status);
     let tooltip = format!("{} - {state_label}", app_display_name());
     let _ = tray.set_tooltip(Some(tooltip));
+    let _ = tray.set_icon(Some(draw_tray_icon(
+        status.is_recording,
+        status.is_processing,
+    )));
 
     #[cfg(target_os = "macos")]
     {
-        let _ = tray.set_title(Some(state_label));
+        let _ = tray.set_icon_as_template(true);
+        let _ = tray.set_title(None::<&str>);
     }
 }
 
@@ -1562,7 +1592,10 @@ fn sync_overlay_window_visibility(app: &AppHandle, status: &RuntimeStatus) {
             let _ = window.set_visible_on_all_workspaces(true);
             configure_overlay_window(&window);
             if let Err(error) = show_overlay_window(&window) {
-                eprintln!("[{}] overlay_window_show_failed error={error}", app_log_prefix());
+                eprintln!(
+                    "[{}] overlay_window_show_failed error={error}",
+                    app_log_prefix()
+                );
             }
         }
         return;
@@ -1877,7 +1910,9 @@ mod transcription_prompt_tests {
 
 #[cfg(test)]
 mod audio_capture_tests {
-    use super::{analyze_wav_capture, app_temp_file_prefix, validate_audio_capture};
+    use super::{
+        analyze_wav_capture, app_temp_file_prefix, recording_cache_stem, validate_audio_capture,
+    };
     use std::{
         fs,
         path::{Path, PathBuf},
@@ -1943,6 +1978,11 @@ mod audio_capture_tests {
         assert!(stats.rms > 0.04);
         assert!(analyze_wav_capture(&path).expect("stats should read").peak > 0.04);
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn recovery_audio_cache_uses_stable_stem() {
+        assert_eq!(recording_cache_stem(1_779_000, 7), "recording-1779000-007");
     }
 }
 
@@ -2374,7 +2414,6 @@ fn toggle_recording_with_mode(
                 Some(0),
                 "Recording too short. Hold the shortcut and speak longer.".to_string(),
             );
-            play_earcon_if_enabled(state, Earcon::Error);
             return Ok(());
         }
 
@@ -2417,7 +2456,6 @@ fn toggle_recording_with_mode(
                     Some(0),
                     format!("Dictation failed: {err}{draft_hint}"),
                 );
-                play_earcon_if_enabled(&app_state, Earcon::Error);
             }
         });
     }
@@ -2701,12 +2739,6 @@ fn analyze_wav_capture(wav_path: &Path) -> Result<AudioCaptureStats, AppError> {
 }
 
 fn microphone_capture_unavailable_message() -> String {
-    #[cfg(target_os = "macos")]
-    if macos_unbundled_dev_runtime() {
-        let terminal_name = terminal_permission_owner_label();
-        return format!("Enable {terminal_name} Microphone, then restart dev.");
-    }
-
     format!(
         "No microphone input is available. Check macOS Microphone permission for {}, then try again.",
         app_display_name()
@@ -2735,6 +2767,20 @@ async fn process_audio_pipeline(
     insertion_target_app: Option<String>,
     processing_started_at: Instant,
 ) -> Result<(), AppError> {
+    let cached_recording = cache_recording_audio(
+        app,
+        &wav_path,
+        &recording_mode,
+        insertion_target_app.as_deref(),
+    )?;
+    debug_log_state(
+        state,
+        format!(
+            "recording_audio_cached path={}",
+            cached_recording.wav_path.display()
+        ),
+    );
+    let processing_wav_path = cached_recording.wav_path.clone();
     let pipeline_result = async {
         let settings = state
             .settings
@@ -2764,7 +2810,7 @@ async fn process_audio_pipeline(
                 clipboard_reference.is_some()
             ),
         );
-        let audio_stats = validate_audio_capture(&wav_path)?;
+        let audio_stats = validate_audio_capture(&processing_wav_path)?;
         debug_log_state(
             state,
             format!(
@@ -2775,7 +2821,8 @@ async fn process_audio_pipeline(
                 audio_stats.peak
             ),
         );
-        let transcription = transcribe_audio(&state.http_client, &settings, &wav_path).await?;
+        let transcription =
+            transcribe_audio(&state.http_client, &settings, &processing_wav_path).await?;
         set_durable_draft(
             app,
             state,
@@ -2844,12 +2891,29 @@ async fn process_audio_pipeline(
     if let Err(cleanup_error) = fs::remove_file(&wav_path) {
         if !wav_path.exists() {
             // Ignore if already removed by external factors.
-        } else if result.is_ok() {
-            return Err(AppError::Message(format!(
-                "Finished processing, but failed to delete temp file: {cleanup_error}"
-            )));
+        } else {
+            debug_log_state(
+                state,
+                format!("temp_recording_cleanup_failed error={cleanup_error}"),
+            );
         }
     }
+
+    if let Err(error) = &result {
+        let error_text = error.to_string();
+        let error_text = error_text.trim().trim_end_matches('.');
+        if let Err(cache_error) = mark_cached_recording_failed(&cached_recording, &error_text) {
+            debug_log_state(
+                state,
+                format!("recording_audio_cache_mark_failed_error error={cache_error}"),
+            );
+        }
+        return Err(AppError::Message(format!(
+            "{error_text}. Audio saved for recovery."
+        )));
+    }
+
+    remove_cached_recording(&cached_recording);
 
     let latency_ms = processing_started_at.elapsed().as_millis() as u64;
     let (inserted_message, output_text, source_app, recording_mode, language) = result?;
@@ -4120,6 +4184,8 @@ fn main() {
 
             let _tray = TrayIconBuilder::with_id(TRAY_ID)
                 .menu(&menu)
+                .icon(draw_tray_icon(false, false))
+                .icon_as_template(true)
                 .tooltip(app_display_name())
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
@@ -4146,7 +4212,6 @@ fn main() {
             get_settings,
             save_settings,
             get_runtime_status,
-            get_debug_log,
             get_transcript_history,
             clear_transcript_history,
             get_durable_draft,
@@ -4154,7 +4219,6 @@ fn main() {
             copy_text_to_clipboard,
             set_hotkey_capture_mode,
             toggle_recording,
-            test_api_connection,
             check_accessibility_permission,
             request_accessibility_permission,
             open_accessibility_settings,

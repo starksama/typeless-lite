@@ -1,0 +1,203 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-05-05T18:56:11+08:00",
+  "title": "Design System: Verba",
+  "extensions": {
+    "colorMeta": {
+      "brand-blue": {
+        "role": "primary",
+        "displayName": "Signal Blue",
+        "canonical": "oklch(54% 0.16 255)",
+        "tonalRamp": [
+          "oklch(15% 0.05 255)",
+          "oklch(25% 0.08 255)",
+          "oklch(35% 0.11 255)",
+          "oklch(45% 0.14 255)",
+          "oklch(54% 0.16 255)",
+          "oklch(66% 0.13 255)",
+          "oklch(80% 0.08 255)",
+          "oklch(94% 0.03 255)"
+        ]
+      },
+      "brand-mint": {
+        "role": "secondary",
+        "displayName": "Live Mint",
+        "canonical": "oklch(58% 0.13 166)",
+        "tonalRamp": [
+          "oklch(15% 0.04 166)",
+          "oklch(25% 0.06 166)",
+          "oklch(36% 0.08 166)",
+          "oklch(48% 0.11 166)",
+          "oklch(58% 0.13 166)",
+          "oklch(70% 0.1 166)",
+          "oklch(82% 0.06 166)",
+          "oklch(94% 0.025 166)"
+        ]
+      },
+      "light-canvas": {
+        "role": "neutral",
+        "displayName": "Paper Canvas",
+        "canonical": "oklch(98.6% 0.003 240)",
+        "tonalRamp": [
+          "oklch(20% 0.006 240)",
+          "oklch(32% 0.006 240)",
+          "oklch(48% 0.005 240)",
+          "oklch(64% 0.005 240)",
+          "oklch(78% 0.004 240)",
+          "oklch(88% 0.004 240)",
+          "oklch(94% 0.003 240)",
+          "oklch(98.6% 0.003 240)"
+        ]
+      },
+      "dark-canvas": {
+        "role": "neutral",
+        "displayName": "Graphite Canvas",
+        "canonical": "oklch(22% 0.006 240)",
+        "tonalRamp": [
+          "oklch(12% 0.006 240)",
+          "oklch(16% 0.006 240)",
+          "oklch(22% 0.006 240)",
+          "oklch(30% 0.006 240)",
+          "oklch(42% 0.006 240)",
+          "oklch(58% 0.005 240)",
+          "oklch(74% 0.004 240)",
+          "oklch(90% 0.003 240)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "title": {
+        "displayName": "Workspace Title",
+        "purpose": "One current workspace title in the main header."
+      },
+      "body": {
+        "displayName": "Utility Body",
+        "purpose": "Short operational prose and transcript previews."
+      },
+      "label": {
+        "displayName": "Compact Label",
+        "purpose": "Field labels, status metadata, and section labels."
+      }
+    },
+    "shadows": [
+      {
+        "name": "soft-frame",
+        "value": "0 18px 42px oklch(18% 0.014 262 / 0.11)",
+        "purpose": "Main native app canvas only."
+      },
+      {
+        "name": "strong-modal",
+        "value": "0 28px 74px oklch(18% 0.014 262 / 0.18)",
+        "purpose": "Modal and toast elevation."
+      },
+      {
+        "name": "state-glow",
+        "value": "0 0 0 3px oklch(54% 0.12 255 / 0.12)",
+        "purpose": "Focus rings and small status dots."
+      }
+    ],
+    "motion": [
+      {
+        "name": "ease-out",
+        "value": "cubic-bezier(0.22, 1, 0.36, 1)",
+        "purpose": "Default state transition easing."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "workspace-stack",
+        "value": "1240px"
+      },
+      {
+        "name": "single-column",
+        "value": "980px"
+      },
+      {
+        "name": "touch-targets",
+        "value": "720px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Compact solid command button for the current primary action.",
+      "html": "<button class=\"ds-button-primary\">Start recording</button>",
+      "css": ".ds-button-primary { min-height: 34px; padding: 0 12px; border: 1px solid oklch(40% 0.09 255 / 0.27); border-radius: 5px; background: oklch(48% 0.155 255); color: oklch(98% 0.004 240); font: 540 0.78rem -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif; transition: background-color 150ms ease, border-color 150ms ease; } .ds-button-primary:hover { background: oklch(58% 0.16 255); } .ds-button-primary:focus-visible { outline: none; box-shadow: 0 0 0 3px oklch(54% 0.12 255 / 0.14); }"
+    },
+    {
+      "name": "Status Pill",
+      "kind": "custom",
+      "refersTo": "status-pill",
+      "description": "Small dot plus short state label. Never use a switch track for status; failed dictation must stay visible instead of collapsing back to Ready.",
+      "html": "<div class=\"ds-status-pill\"><span></span><p>Ready</p></div>",
+      "css": ".ds-status-pill { display: inline-grid; grid-template-columns: 8px minmax(0, 1fr); align-items: center; gap: 7px; min-height: 28px; padding: 4px 8px; border: 1px solid oklch(38% 0.012 240 / 0.15); border-radius: 5px; background: oklch(94.5% 0.006 262 / 0.96); color: oklch(19% 0.01 240); } .ds-status-pill span { width: 8px; height: 8px; border-radius: 2px; background: oklch(58% 0.13 166); box-shadow: 0 0 0 3px oklch(54% 0.12 255 / 0.12); } .ds-status-pill p { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 400 0.76rem -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif; }"
+    },
+    {
+      "name": "Shortcut Chip",
+      "kind": "chip",
+      "refersTo": "shortcut-chip",
+      "description": "Compact shortcut display using sans-serif key tokens.",
+      "html": "<span class=\"ds-shortcut-chip\"><span>Hold</span><kbd>Option</kbd><kbd>1</kbd></span>",
+      "css": ".ds-shortcut-chip { display: inline-flex; align-items: center; gap: 5px; min-height: 28px; padding: 3px 6px 3px 7px; border: 1px solid oklch(38% 0.012 240 / 0.15); border-radius: 5px; background: oklch(94% 0.005 262 / 0.86); color: oklch(32% 0.012 240); font: 400 0.73rem -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif; } .ds-shortcut-chip kbd { min-height: 20px; padding: 0 6px; border: 1px solid oklch(42% 0.014 262 / 0.16); border-radius: 3px; background: oklch(92% 0.006 262); color: oklch(19% 0.01 240); font: 540 0.68rem -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif; line-height: 20px; }"
+    },
+    {
+      "name": "Sidebar Tab",
+      "kind": "nav",
+      "refersTo": "sidebar-tab",
+      "description": "Calm navigation row where hover, focus, and active use the same fixed 32px icon-cell geometry.",
+      "html": "<button class=\"ds-sidebar-tab is-active\"><span><svg viewBox=\"0 0 24 24\"><path d=\"M4 12h16\"/></svg></span><strong>Home</strong></button>",
+      "css": ".ds-sidebar-tab { display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 9px; align-items: center; min-height: 38px; padding: 3px 4px; border: 0; border-radius: 5px; background: transparent; color: oklch(19% 0.01 240); font: 500 0.82rem -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif; } .ds-sidebar-tab span { width: 32px; height: 32px; display: grid; place-items: center; border: 1px solid transparent; border-radius: 5px; color: oklch(32% 0.012 240); } .ds-sidebar-tab svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.8; } .ds-sidebar-tab:hover span { border-color: oklch(38% 0.012 240 / 0.15); background: oklch(94% 0.004 240 / 0.86); } .ds-sidebar-tab.is-active span { border-color: oklch(54% 0.13 255 / 0.24); background: oklch(90% 0.042 255 / 0.66); color: oklch(43% 0.155 255); }"
+    },
+    {
+      "name": "Toggle Row",
+      "kind": "input",
+      "refersTo": "toggle-control",
+      "description": "Quiet settings toggle with a small native-feeling track.",
+      "html": "<label class=\"ds-toggle\"><input type=\"checkbox\" checked><span>Polishing</span></label>",
+      "css": ".ds-toggle { display: inline-flex; align-items: center; gap: 9px; min-height: 38px; padding: 8px 10px; border: 1px solid oklch(38% 0.012 240 / 0.15); border-radius: 5px; background: oklch(96% 0.003 240 / 0.86); color: oklch(19% 0.01 240); font: 530 0.8rem -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif; } .ds-toggle input { appearance: none; position: relative; width: 30px; height: 17px; margin: 0; border: 1px solid oklch(30% 0.014 240 / 0.24); border-radius: 99px; background: oklch(99% 0.002 240 / 0.98); } .ds-toggle input::before { content: ''; position: absolute; top: 3px; left: 3px; width: 9px; height: 9px; border-radius: 99px; background: oklch(51% 0.012 240); transition: transform 160ms cubic-bezier(0.22, 1, 0.36, 1); } .ds-toggle input:checked { border-color: oklch(54% 0.16 255); background: oklch(90% 0.042 255 / 0.7); } .ds-toggle input:checked::before { transform: translateX(13px); background: oklch(43% 0.155 255); }"
+    }
+  ],
+  "narrative": {
+    "northStar": "Quiet Instrument Panel",
+    "overview": "Verba should feel like a precise desktop utility that stays behind the user's writing flow. The interface is compact, neutral, and operational: one primary action, short state labels, dense controls, and no promotional framing. Texture comes from disciplined material contrast, fine borders, steady state indicators, and the blue-to-mint identity used only where it communicates action or state.",
+    "keyCharacteristics": [
+      "Compact desktop density with low-radius surfaces.",
+      "Restrained light and graphite themes with tinted neutrals.",
+      "Blue for primary actions and processing, mint for ready/recording/success.",
+      "Status uses small dots and icon changes, not fake switches or text bars.",
+      "Navigation selection uses one fixed 32px icon cell for hover, focus, and active states.",
+      "Recording feedback uses a tiny transparent dot-line overlay while active, a small spinner while processing, and an in-app toast/status message when capture fails."
+    ],
+    "rules": [
+      {
+        "name": "The Ten Percent Accent Rule",
+        "body": "Brand color must stay rare. If blue or mint dominates a screen, the interface is drifting into decorative AI-tool territory.",
+        "section": "colors"
+      },
+      {
+        "name": "The Native Tray Rule",
+        "body": "macOS tray assets are monochrome template icons. Do not use the colored app icon or a status text title in the menu bar.",
+        "section": "colors"
+      },
+      {
+        "name": "The Flat-At-Rest Rule",
+        "body": "Controls, nav items, transcript rows, and settings panels must not float. Use borders and tonal changes before shadows.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do keep the primary workflow visible: speak, process, insert.",
+      "Do use compact spacing, low radius, and short state labels.",
+      "Do keep tray status icon-only and monochrome."
+    ],
+    "donts": [
+      "Don't build promotional SaaS dashboards.",
+      "Don't use cute rounded controls, 3D button treatments, glass cards, purple gradients, or decorative texture.",
+      "Don't let header controls overflow outside the app window.",
+      "Don't use a tray title such as Idle, Ready, Recording, or Processing."
+    ]
+  }
+}

@@ -185,33 +185,35 @@
           data-tab-panel="home"
         >
           <section class="page-surface home-overview">
-            <div class="home-topbar">
-              <div class="home-heading">
-                <h2>Capture text</h2>
+            <div class="home-dashboard">
+              <div class="home-topbar">
+                <div class="home-heading">
+                  <h2>Capture text</h2>
+                </div>
+
+                <div class="buttons home-actions">
+                  <button id="home-toggle-btn" type="button" class="ui-button">Start recording</button>
+                </div>
               </div>
 
-              <div class="buttons home-actions">
-                <button id="home-toggle-btn" type="button" class="ui-button">Start recording</button>
-              </div>
-            </div>
-
-            <div class="home-stats" aria-label="Usage summary">
-              <div class="home-stat">
-                <span class="summary-label">Active days</span>
-                <strong id="home-stat-days">0</strong>
-              </div>
-              <div class="home-stat">
-                <span class="summary-label">Words captured</span>
-                <strong id="home-stat-words">0</strong>
-              </div>
-              <div class="home-stat">
-                <span class="summary-label">Est. typing time saved</span>
-                <strong id="home-stat-saved">0m</strong>
+              <div class="home-stats" aria-label="Usage summary">
+                <div class="home-stat">
+                  <span class="summary-label">Active days</span>
+                  <strong id="home-stat-days">0</strong>
+                </div>
+                <div class="home-stat">
+                  <span class="summary-label">Words captured</span>
+                  <strong id="home-stat-words">0</strong>
+                </div>
+                <div class="home-stat">
+                  <span class="summary-label">Time saved</span>
+                  <strong id="home-stat-saved">0m</strong>
+                </div>
               </div>
             </div>
 
             <section class="home-recent">
-              <p class="summary-label">Recent</p>
+              <p class="summary-label">Recent transcripts</p>
               <p id="home-recent-empty" class="hint">Record once; your latest transcripts appear here.</p>
               <div id="home-recent-feed" class="home-recent-feed" aria-live="polite"></div>
             </section>
@@ -269,10 +271,16 @@
           hidden
         >
           <section class="page-surface history-page">
-            <label class="ui-field history-search-field">
-              <span class="ui-label">Search</span>
-              <input id="history-search" class="ui-input" type="search" placeholder="Search transcripts" />
-            </label>
+            <div class="history-toolbar">
+              <div class="history-toolbar-copy">
+                <p class="summary-label">Archive</p>
+                <strong id="history-count" class="history-count">0 transcripts</strong>
+              </div>
+              <label class="ui-field history-search-field">
+                <span class="ui-label">Search</span>
+                <input id="history-search" class="ui-input" type="search" placeholder="Search transcripts" />
+              </label>
+            </div>
             <p id="history-empty" class="hint">No transcripts yet. Record once from Home or with your shortcut.</p>
             <div id="history-feed" class="history-feed" aria-live="polite"></div>
           </section>
@@ -289,7 +297,7 @@
           <section class="settings-page">
             <div class="settings-shell">
               <aside class="settings-nav-panel">
-                <div class="settings-nav" role="tablist" aria-label="Settings sections">
+                <div class="settings-nav" role="tablist" aria-label="Settings sections" aria-orientation="vertical">
                   <button
                     id="settings-tab-general"
                     type="button"
@@ -326,18 +334,6 @@
                   >
                     <span class="settings-nav-title">AI</span>
                   </button>
-                  <button
-                    id="settings-tab-access"
-                    type="button"
-                    class="settings-nav-btn"
-                    data-settings-target="privacy"
-                    role="tab"
-                    aria-selected="false"
-                    aria-controls="settings-panel-access"
-                    tabindex="-1"
-                  >
-                    <span class="settings-nav-title">Access</span>
-                  </button>
                 </div>
               </aside>
 
@@ -349,7 +345,7 @@
                     <button id="reopen-onboarding-btn" type="button" class="ui-button ui-button-quiet">
                       Setup guide
                     </button>
-                    <button id="save-settings-btn" type="submit" class="ui-button">Save changes</button>
+                    <button id="save-settings-btn" type="submit" class="ui-button">Save</button>
                   </div>
                 </div>
 
@@ -460,10 +456,56 @@
                   aria-labelledby="settings-tab-ai"
                   hidden
                 >
-                  <div class="settings-panel-grid settings-panel-grid-primary">
-                    <label class="ui-field">
-                      <span class="ui-label">OpenAI API key</span>
-                      <input id="apiKey" class="ui-input" type="password" autocomplete="off" placeholder="sk-..." required />
+                  <div id="api-key-control" class="api-key-control" data-state="missing">
+                    <div class="api-key-main">
+                      <div class="api-key-state">
+                        <span class="ui-label">OpenAI API key</span>
+                        <span id="api-key-summary" class="api-key-summary">Missing</span>
+                      </div>
+                      <button
+                        id="api-key-edit-btn"
+                        type="button"
+                        class="ui-button ui-button-secondary"
+                        aria-expanded="false"
+                        aria-controls="api-key-editor"
+                      >
+                        Set key
+                      </button>
+                    </div>
+                    <label id="api-key-editor" class="api-key-editor" hidden>
+                      <input
+                        id="apiKey"
+                        class="ui-input"
+                        type="password"
+                        autocomplete="off"
+                        autocapitalize="off"
+                        spellcheck="false"
+                        placeholder="sk-..."
+                        aria-label="OpenAI API key"
+                      />
+                    </label>
+                  </div>
+
+                  <div class="toggle-grid">
+                    <label class="toggle-card checkbox-label">
+                      <input id="formatEnabled" type="checkbox" />
+                      <span>
+                        <strong>Polishing</strong>
+                      </span>
+                    </label>
+
+                    <label class="toggle-card checkbox-label">
+                      <input id="skipFormatterInTerminals" type="checkbox" checked />
+                      <span>
+                        <strong>Skip polishing in terminals</strong>
+                      </span>
+                    </label>
+
+                    <label class="toggle-card checkbox-label">
+                      <input id="includeClipboardContext" type="checkbox" checked />
+                      <span>
+                        <strong>Use clipboard context</strong>
+                      </span>
                     </label>
                   </div>
 
@@ -502,89 +544,6 @@
                       ></textarea>
                     </label>
                   </details>
-
-                  <div class="toggle-grid">
-                    <label class="toggle-card checkbox-label">
-                      <input id="formatEnabled" type="checkbox" />
-                      <span>
-                        <strong>Polishing</strong>
-                      </span>
-                    </label>
-
-                    <label class="toggle-card checkbox-label">
-                      <input id="skipFormatterInTerminals" type="checkbox" checked />
-                      <span>
-                        <strong>Skip polishing in terminals</strong>
-                      </span>
-                    </label>
-
-                    <label class="toggle-card checkbox-label">
-                      <input id="includeClipboardContext" type="checkbox" checked />
-                      <span>
-                        <strong>Use clipboard context</strong>
-                      </span>
-                    </label>
-                  </div>
-                </section>
-
-                <section
-                  id="settings-panel-access"
-                  class="settings-panel"
-                  data-settings-panel="privacy"
-                  role="tabpanel"
-                  aria-labelledby="settings-tab-access"
-                  hidden
-                >
-                  <div class="access-list">
-                    <section class="support-card support-card-strong access-row" id="settings-accessibility-card" data-permission-state="checking">
-                      <div class="support-card-head">
-                        <h3>Accessibility</h3>
-                        <strong id="accessibility-status" class="support-card-status">Unknown</strong>
-                      </div>
-                      <p id="settings-accessibility-guidance" class="hint">Check access before recording.</p>
-                      <div class="buttons">
-                        <button id="open-accessibility-settings-btn" type="button" class="ui-button ui-button-secondary">
-                          Open Accessibility
-                        </button>
-                        <button id="check-accessibility-btn" type="button" class="ui-button ui-button-quiet">
-                          Check again
-                        </button>
-                        <button id="reset-accessibility-permission-btn" type="button" class="ui-button ui-button-quiet" hidden>
-                          Reset
-                        </button>
-                      </div>
-                    </section>
-
-                    <section class="support-card support-card-strong access-row" id="settings-microphone-card" data-permission-state="checking">
-                      <div class="support-card-head">
-                        <h3>Microphone</h3>
-                        <strong id="microphone-status" class="support-card-status">Unknown</strong>
-                      </div>
-                      <p id="settings-microphone-guidance" class="hint">Check access before recording.</p>
-                      <div class="buttons">
-                        <button id="open-microphone-settings-btn" type="button" class="ui-button ui-button-secondary">
-                          Request access
-                        </button>
-                        <button id="check-microphone-btn" type="button" class="ui-button ui-button-quiet">
-                          Check again
-                        </button>
-                      </div>
-                      <span id="settings-microphone-status" class="hidden">Unknown</span>
-                    </section>
-
-                    <section class="support-card support-card-strong access-row">
-                      <div class="support-card-head">
-                        <h3>API</h3>
-                        <strong id="settings-diagnostics-copy-status" class="support-card-status hidden"></strong>
-                        <span id="settings-accessibility-status" class="hidden">Unknown</span>
-                      </div>
-                      <div class="buttons">
-                        <button id="test-api-btn" type="button" class="ui-button ui-button-secondary">Test connection</button>
-                        <button id="copy-diagnostics-btn" type="button" class="ui-button ui-button-quiet" hidden>Copy report</button>
-                      </div>
-                      <p id="settings-api-test-status" class="hint hidden"></p>
-                    </section>
-                  </div>
                 </section>
               </form>
             </div>
@@ -662,7 +621,6 @@
 
         <section class="onboarding-step hidden" data-onboarding-step="api">
           <h3>API setup</h3>
-          <p class="subtle">Saved locally. Test it later from Settings > Access.</p>
 
           <label class="ui-field">
             <span class="ui-label">OpenAI API key</span>
