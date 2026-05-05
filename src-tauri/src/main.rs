@@ -792,7 +792,7 @@ fn open_accessibility_settings() -> Result<String, String> {
             match Command::new("open").arg(url).status() {
                 Ok(status) if status.success() => {
                     return Ok(format!(
-                        "Opened Accessibility. Turn {app_name} on, then return to Keylesss and click Check again."
+                        "Opened Accessibility. Turn {app_name} on, then return and click Check again."
                     ));
                 }
                 _ => {}
@@ -826,7 +826,10 @@ fn reset_accessibility_permission() -> Result<String, String> {
 
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         Err(if stderr.is_empty() {
-            "macOS did not reset Accessibility access. Open Accessibility and turn Keylesss off and on manually.".to_string()
+            format!(
+                "macOS did not reset Accessibility access. Open Accessibility and turn {} off and on manually.",
+                app_display_name()
+            )
         } else {
             format!("macOS did not reset Accessibility access: {stderr}")
         })
@@ -920,21 +923,25 @@ fn microphone_status_from_macos_authorization(status: i32) -> MicrophonePermissi
             is_supported: true,
             is_granted: false,
             status: "not_determined".to_string(),
-            guidance: format!("Click Allow in the macOS prompt for {app_name}."),
+            guidance: format!(
+                "Click Request access. macOS shows a prompt for {app_name}; apps cannot be added manually in Microphone."
+            ),
         },
         MACOS_AV_AUTHORIZATION_DENIED => MicrophonePermissionStatus {
             platform: "macOS".to_string(),
             is_supported: true,
             is_granted: false,
             status: "denied".to_string(),
-            guidance: format!("Open Microphone, turn {app_name} on, then click Check again."),
+            guidance: format!(
+                "Open Microphone and turn {app_name} on. If it is missing, click Request access first."
+            ),
         },
         MACOS_AV_AUTHORIZATION_RESTRICTED => MicrophonePermissionStatus {
             platform: "macOS".to_string(),
             is_supported: true,
             is_granted: false,
             status: "restricted".to_string(),
-            guidance: "Microphone is restricted by macOS policy.".to_string(),
+            guidance: "Microphone is blocked by macOS policy.".to_string(),
         },
         _ => MicrophonePermissionStatus {
             platform: "macOS".to_string(),
@@ -964,7 +971,7 @@ fn open_microphone_settings() -> Result<String, String> {
         match Command::new("open").arg(url).status() {
             Ok(status) if status.success() => {
                 return Ok(format!(
-                    "Opened Microphone. Turn {app_name} on, then return to Keylesss and click Check again."
+                    "Opened Microphone. Turn {app_name} on if it is listed. If it is missing, return and click Request access first."
                 ));
             }
             _ => {}
@@ -972,7 +979,7 @@ fn open_microphone_settings() -> Result<String, String> {
     }
 
     Err(
-        "Could not open Microphone. Open System Settings > Privacy & Security > Microphone."
+        "Could not open Microphone. Click Request access first, then use System Settings after the app appears."
             .to_string(),
     )
 }
@@ -1815,12 +1822,14 @@ mod permission_status_tests {
             microphone_status_from_macos_authorization(MACOS_AV_AUTHORIZATION_NOT_DETERMINED);
         assert!(!not_requested.is_granted);
         assert_eq!(not_requested.status, "not_determined");
-        assert!(not_requested.guidance.contains("macOS prompt"));
+        assert!(not_requested.guidance.contains("Request access"));
+        assert!(not_requested.guidance.contains("cannot be added manually"));
 
         let denied = microphone_status_from_macos_authorization(MACOS_AV_AUTHORIZATION_DENIED);
         assert!(!denied.is_granted);
         assert_eq!(denied.status, "denied");
         assert!(denied.guidance.contains("turn"));
+        assert!(denied.guidance.contains("If it is missing"));
     }
 }
 
@@ -2178,6 +2187,14 @@ fn start_recording(
     recording_mode: RecordingModeKind,
     pre_recording_clipboard_context: Option<String>,
 ) -> Result<RecorderSession, AppError> {
+    #[cfg(target_os = "macos")]
+    {
+        let permission = request_microphone_permission_status();
+        if !permission.is_granted {
+            return Err(AppError::Message(permission.guidance));
+        }
+    }
+
     let host = cpal::default_host();
     let device = host
         .default_input_device()

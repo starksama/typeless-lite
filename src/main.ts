@@ -427,20 +427,26 @@ function setPermissionUiState(
 }
 
 function accessibilityGuidance(status: AccessibilityPermissionStatus | null): string {
+  const appName = APP_BRAND.displayName;
   if (!status) return 'Click Check again to read macOS access.';
   if (!status.is_supported) return 'Accessibility setup is only available on macOS.';
   if (status.is_granted) return 'Ready to insert text into the focused app.';
-  return 'Open Accessibility, turn Keylesss on, then click Check again.';
+  return `Open Accessibility, turn ${appName} on, then click Check again.`;
 }
 
 function microphoneGuidance(status: MicrophonePermissionStatus | null): string {
+  const appName = APP_BRAND.displayName;
   if (!status) return 'Click Check again to read macOS access.';
   if (!status.is_supported) return 'Microphone setup is only available on macOS.';
   if (status.is_granted) return 'Ready to record.';
-  if (status.status === 'not_determined') return 'Click Allow to show the macOS microphone prompt.';
-  if (status.status === 'denied') return 'Open Microphone, turn Keylesss on, then click Check again.';
-  if (status.status === 'restricted') return 'Microphone is restricted by macOS policy.';
-  return 'Allow microphone access, then click Check again.';
+  if (status.status === 'not_determined') {
+    return `Click Request access. macOS shows a prompt; apps cannot be added manually in Microphone.`;
+  }
+  if (status.status === 'denied') {
+    return `Open Microphone and turn ${appName} on. If it is missing, click Request access first.`;
+  }
+  if (status.status === 'restricted') return 'Microphone is blocked by macOS policy.';
+  return 'Click Request access, then follow the macOS prompt.';
 }
 
 function setAccessibilityStatusSummary(message: string, clearStructured = false): void {
@@ -492,7 +498,7 @@ function applyBranding(): void {
   sidebarBrandNameEl.textContent = APP_BRAND.displayName;
   onboardingTitleEl.textContent = `Welcome to ${APP_BRAND.displayName}`;
   onboardingPermissionsCopyEl.textContent =
-    'Complete both rows. Microphone uses a macOS prompt; Accessibility opens System Settings.';
+    'Click Request access for Microphone. Apps cannot be added manually in System Settings.';
 }
 
 function renderWorkspaceHeader(tab: WorkspaceTab): void {
@@ -1598,7 +1604,8 @@ function renderMicrophoneStatus(status: MicrophonePermissionStatus): void {
   setMicrophoneStatusSummary(label);
   settingsMicrophoneGuidanceEl.textContent = microphoneGuidance(status);
   setPermissionUiState(settingsMicrophoneCardEl, status);
-  const microphoneActionLabel = status.status === 'not_determined' ? 'Request access' : 'Open Microphone';
+  const microphoneActionLabel =
+    status.status === 'denied' || status.status === 'restricted' ? 'Open Microphone' : 'Request access';
   openMicrophoneSettingsBtn.textContent = status.is_granted ? 'Allowed' : microphoneActionLabel;
   openMicrophoneSettingsBtn.disabled = status.is_granted || !status.is_supported;
   checkMicrophoneBtn.hidden = status.is_granted;
@@ -1607,20 +1614,24 @@ function renderMicrophoneStatus(status: MicrophonePermissionStatus): void {
 }
 
 function onboardingAccessibilityLabel(status: AccessibilityPermissionStatus | null): string {
+  const appName = APP_BRAND.displayName;
   if (!status) return 'Checking';
   if (!status.is_supported) return 'Accessibility setup is only available on macOS.';
   if (status.is_granted) return 'Enabled. Continue setup.';
-  return 'Open Accessibility, turn Keylesss on, then click Check again.';
+  return `Open Accessibility, turn ${appName} on, then click Check again.`;
 }
 
 function onboardingMicrophoneLabel(status: MicrophonePermissionStatus | null): string {
+  const appName = APP_BRAND.displayName;
   if (!status) return 'Checking';
   if (!status.is_supported) return 'Microphone setup is only available on macOS.';
   if (status.is_granted) return 'Enabled. Continue setup.';
-  if (status.status === 'not_determined') return 'Click Allow to show the macOS microphone prompt.';
-  if (status.status === 'denied') return 'Open Microphone, turn Keylesss on, then click Check again.';
-  if (status.status === 'restricted') return 'Microphone is restricted by macOS policy.';
-  return 'Allow microphone access, then click Check again.';
+  if (status.status === 'not_determined') {
+    return 'Click Request access. macOS will show the permission prompt.';
+  }
+  if (status.status === 'denied') return `Open Microphone and turn ${appName} on.`;
+  if (status.status === 'restricted') return 'Microphone is blocked by macOS policy.';
+  return 'Click Request access, then follow the macOS prompt.';
 }
 
 function renderOnboardingPermissionStatuses(): void {
@@ -1632,8 +1643,11 @@ function renderOnboardingPermissionStatuses(): void {
     !lastAccessibilityStatus || !lastAccessibilityStatus.is_supported || lastAccessibilityStatus.is_granted;
   onboardingOpenAccessibilitySettingsBtn.disabled =
     Boolean(lastAccessibilityStatus && (!lastAccessibilityStatus.is_supported || lastAccessibilityStatus.is_granted));
-  onboardingOpenMicrophoneSettingsBtn.textContent =
-    lastMicrophoneStatus?.status === 'not_determined' ? 'Allow' : 'Open Microphone';
+  const microphoneActionLabel =
+    lastMicrophoneStatus?.status === 'denied' || lastMicrophoneStatus?.status === 'restricted'
+      ? 'Open Microphone'
+      : 'Request access';
+  onboardingOpenMicrophoneSettingsBtn.textContent = lastMicrophoneStatus?.is_granted ? 'Allowed' : microphoneActionLabel;
   onboardingOpenMicrophoneSettingsBtn.disabled =
     Boolean(lastMicrophoneStatus && (!lastMicrophoneStatus.is_supported || lastMicrophoneStatus.is_granted));
 }
@@ -1718,7 +1732,9 @@ async function openMicrophoneSettingsFromUi(button: HTMLButtonElement): Promise<
     }
 
     if (permissionStatus.status === 'not_determined') {
-      setStatusMessage('Click Allow in the macOS microphone prompt.');
+      setStatusMessage(
+        `No microphone prompt appeared. Quit and reopen ${APP_BRAND.displayName}, then click Request access again.`
+      );
       syncPermissionSetupBanner();
       return;
     }
@@ -1729,7 +1745,9 @@ async function openMicrophoneSettingsFromUi(button: HTMLButtonElement): Promise<
     syncPermissionSetupBanner();
   } catch (error) {
     setMicrophoneStatusSummary('Open failed');
-    setStatusMessage('Could not open Microphone. Open System Settings > Privacy & Security > Microphone.');
+    setStatusMessage(
+      `Could not open Microphone. Click Request access first, then use System Settings after ${APP_BRAND.displayName} appears.`
+    );
   } finally {
     button.disabled = Boolean(lastMicrophoneStatus && (!lastMicrophoneStatus.is_supported || lastMicrophoneStatus.is_granted));
     renderOnboardingPermissionStatuses();
@@ -1758,7 +1776,7 @@ async function ensureOnboardingPermissionsReady(): Promise<boolean> {
 
   setStatusMessage(
     missing[0] === 'Accessibility'
-      ? 'Open Accessibility, turn Keylesss on, then click Check again.'
+      ? `Open Accessibility, turn ${APP_BRAND.displayName} on, then click Check again.`
       : microphoneGuidance(microphone)
   );
   syncPermissionSetupBanner();
@@ -2701,6 +2719,9 @@ checkMicrophoneBtn.addEventListener('click', async () => {
     await checkAndRenderMicrophoneStatus();
   } catch (error) {
     setMicrophoneStatusSummary('Check failed', true);
+    setStatusMessage(
+      `Could not read Microphone access. Click Request access, then check again after ${APP_BRAND.displayName} appears in System Settings.`
+    );
   } finally {
     checkMicrophoneBtn.disabled = false;
   }
@@ -2780,7 +2801,7 @@ onboardingCheckAccessibilityBtn.addEventListener('click', async () => {
     await checkAndRenderAccessibilityStatus();
   } catch (error) {
     setAccessibilityStatusSummary('Check failed', true);
-    setStatusMessage('Could not read Accessibility. Open System Settings and check manually.');
+    setStatusMessage(`Could not read Accessibility. Open Accessibility, turn ${APP_BRAND.displayName} on, then click Check again.`);
   } finally {
     onboardingCheckAccessibilityBtn.disabled = false;
   }
@@ -2796,7 +2817,9 @@ onboardingCheckMicrophoneBtn.addEventListener('click', async () => {
     await checkAndRenderMicrophoneStatus();
   } catch (error) {
     setMicrophoneStatusSummary('Check failed', true);
-    setStatusMessage('Could not read Microphone access. Open System Settings and check manually.');
+    setStatusMessage(
+      `Could not read Microphone access. Click Request access, then check System Settings after ${APP_BRAND.displayName} appears.`
+    );
   } finally {
     onboardingCheckMicrophoneBtn.disabled = false;
   }

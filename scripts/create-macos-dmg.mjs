@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -12,6 +12,7 @@ const displayName = appConfig.displayName;
 const cargoTargetDir = join(rootDir, 'src-tauri', 'target', 'release');
 const appPath = join(cargoTargetDir, 'bundle', 'macos', `${displayName}.app`);
 const dmgDir = join(cargoTargetDir, 'bundle', 'dmg');
+const dmgStageDir = join(dmgDir, `${displayName}-install`);
 const macArch = arch === 'arm64' ? 'aarch64' : arch;
 const dmgPath = join(dmgDir, `${displayName}_${packageJson.version}_${macArch}.dmg`);
 
@@ -25,14 +26,25 @@ if (!existsSync(appPath)) {
 
 mkdirSync(dmgDir, { recursive: true });
 rmSync(dmgPath, { force: true });
+rmSync(dmgStageDir, { recursive: true, force: true });
+mkdirSync(dmgStageDir, { recursive: true });
+
+execFileSync('ditto', [appPath, join(dmgStageDir, `${displayName}.app`)], { stdio: 'inherit' });
+symlinkSync('/Applications', join(dmgStageDir, 'Applications'));
+writeFileSync(
+  join(dmgStageDir, 'Install.txt'),
+  `Install ${displayName}\n\n1. Drag ${displayName}.app onto Applications.\n2. Eject this disk image.\n3. Open ${displayName} from Applications.\n\nDo not run ${displayName} directly from this disk image when setting macOS permissions.\n`
+);
 
 execFileSync('hdiutil', [
   'create',
   '-volname', displayName,
-  '-srcfolder', appPath,
+  '-srcfolder', dmgStageDir,
   '-ov',
   '-format', 'UDZO',
   dmgPath
 ], { stdio: 'inherit' });
+
+rmSync(dmgStageDir, { recursive: true, force: true });
 
 console.log(`Created ${dmgPath}`);

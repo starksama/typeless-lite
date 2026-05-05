@@ -507,7 +507,7 @@
                       <p id="settings-microphone-guidance" class="hint">Check access before recording.</p>
                       <div class="buttons">
                         <button id="open-microphone-settings-btn" type="button" class="ui-button ui-button-secondary">
-                          Allow
+                          Request access
                         </button>
                         <button id="check-microphone-btn" type="button" class="ui-button ui-button-quiet">
                           Check
@@ -556,7 +556,7 @@
         <section class="onboarding-step" data-onboarding-step="welcome">
           <p class="subtle">Set the three things Keylesss needs before your first dictation.</p>
           <ul class="onboarding-list">
-            <li>Allow microphone recording.</li>
+            <li>Request microphone access.</li>
             <li>Allow Accessibility so Keylesss can insert text into other apps.</li>
             <li>Add an API key and choose your shortcut.</li>
           </ul>
@@ -565,7 +565,7 @@
         <section class="onboarding-step hidden" data-onboarding-step="permissions">
           <h3>Access</h3>
           <p id="onboarding-permissions-copy" class="subtle">
-            Complete both rows. Microphone uses a macOS prompt; Accessibility opens System Settings.
+            Click Request access for Microphone. Apps cannot be added manually in System Settings.
           </p>
           <div class="permission-list">
             <section id="onboarding-accessibility-row" class="permission-row" data-permission-state="checking">
@@ -593,11 +593,11 @@
                 <p id="onboarding-microphone-status" class="hint">Checking</p>
               </div>
               <div class="buttons">
-                <button id="onboarding-check-microphone-btn" type="button" class="ui-button ui-button-secondary">
-                  Check again
-                </button>
                 <button id="onboarding-open-microphone-settings-btn" type="button" class="ui-button ui-button-secondary">
-                  Allow
+                  Request access
+                </button>
+                <button id="onboarding-check-microphone-btn" type="button" class="ui-button ui-button-quiet">
+                  Check again
                 </button>
               </div>
             </section>
