@@ -3,6 +3,6 @@
 <plist version="1.0">
 <dict>
   <key>NSMicrophoneUsageDescription</key>
-  <string>Keylesss records microphone audio so it can transcribe your dictation.</string>
+  <string>Verba records microphone audio so it can transcribe your dictation.</string>
 </dict>
 </plist>

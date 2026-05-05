@@ -79,7 +79,6 @@ type HotkeyCaptureTarget =
 type SettingsSection = 'general' | 'shortcuts' | 'ai' | 'privacy';
 type StatusBannerTone = 'ready' | 'recording' | 'processing' | 'issue';
 type AppToastTone = 'success' | 'error';
-type TranscriptRowActionMode = 'button' | 'indicator';
 type ThemePreference = 'system' | 'light' | 'dark';
 type ResolvedTheme = 'light' | 'dark';
 
@@ -90,6 +89,30 @@ const PLATFORM_LABEL_SOURCE =
 const PLATFORM_IS_MAC = /mac|iphone|ipad|ipod/i.test(PLATFORM_LABEL_SOURCE);
 
 document.body.classList.toggle('platform-mac', PLATFORM_IS_MAC);
+
+const TAURI_RUNTIME_MISSING_MESSAGE = 'Open Verba from the desktop app to use this control.';
+
+function isTauriRuntime(): boolean {
+  return typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
+}
+
+function invokeCommand<T = unknown>(command: string, args?: Record<string, unknown>): Promise<T> {
+  if (!isTauriRuntime()) {
+    return Promise.reject(new Error(TAURI_RUNTIME_MISSING_MESSAGE));
+  }
+  return invoke<T>(command, args);
+}
+
+function listenEvent<T>(eventName: string, handler: (event: { payload: T }) => void): Promise<() => void> {
+  if (!isTauriRuntime()) {
+    return Promise.resolve(() => undefined);
+  }
+  return listen<T>(eventName, handler);
+}
+
+function userErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error).replace(/^Error:\s*/, '');
+}
 
 const LANGUAGE_LABELS: Record<TranscriptionLanguage, string> = {
   auto: 'Auto',
@@ -231,7 +254,6 @@ const toggleShortcutAddBtn = document.querySelector<HTMLButtonElement>('#toggle-
 const shortcutDirtyIndicatorEl = document.querySelector<HTMLSpanElement>('#shortcut-dirty-indicator')!;
 const homeToggleBtn = document.querySelector<HTMLButtonElement>('#home-toggle-btn')!;
 const homeFastModeBtn = document.querySelector<HTMLButtonElement>('#home-fast-mode-btn')!;
-const homeFastModeStateEl = document.querySelector<HTMLSpanElement>('#home-fast-mode-state')!;
 const homeStatDaysEl = document.querySelector<HTMLSpanElement>('#home-stat-days')!;
 const homeStatWordsEl = document.querySelector<HTMLSpanElement>('#home-stat-words')!;
 const homeStatSavedEl = document.querySelector<HTMLSpanElement>('#home-stat-saved')!;
@@ -369,6 +391,7 @@ let lastDebugLogLines: string[] = [];
 let lastRenderedRuntimeState: Pick<RuntimeStatus, 'is_recording' | 'is_processing' | 'last_message'> | null = null;
 let appStatusMessage = 'Ready';
 let statusMessageSource: 'runtime' | 'ui' = 'runtime';
+let preOnboardingFocusEl: HTMLElement | null = null;
 const systemThemeQuery = window.matchMedia('(prefers-color-scheme: light)');
 
 function isThemePreference(value: string | null): value is ThemePreference {
@@ -377,7 +400,7 @@ function isThemePreference(value: string | null): value is ThemePreference {
 
 function readThemePreference(): ThemePreference {
   const stored = localStorage.getItem(THEME_MODE_KEY);
-  return isThemePreference(stored) ? stored : 'system';
+  return isThemePreference(stored) ? stored : 'light';
 }
 
 function resolveTheme(preference: ThemePreference): ResolvedTheme {
@@ -430,6 +453,7 @@ function accessibilityGuidance(status: AccessibilityPermissionStatus | null): st
   const appName = APP_BRAND.displayName;
   if (!status) return 'Click Check again to read macOS access.';
   if (!status.is_supported) return 'Accessibility setup is only available on macOS.';
+  if (status.status === 'dev_terminal') return status.guidance;
   if (status.is_granted) return 'Ready to insert text into the focused app.';
   return `Open Accessibility, turn ${appName} on, then click Check again.`;
 }
@@ -438,6 +462,7 @@ function microphoneGuidance(status: MicrophonePermissionStatus | null): string {
   const appName = APP_BRAND.displayName;
   if (!status) return 'Click Check again to read macOS access.';
   if (!status.is_supported) return 'Microphone setup is only available on macOS.';
+  if (status.status === 'dev_terminal') return status.guidance;
   if (status.is_granted) return 'Ready to record.';
   if (status.status === 'not_determined') {
     return `Click Request access. macOS shows a prompt; apps cannot be added manually in Microphone.`;
@@ -726,7 +751,7 @@ function setActiveSettingsSection(targetSection: SettingsSection, focusButton = 
   settingsSectionButtons.forEach((button) => {
     const isActive = button.dataset.settingsTarget === targetSection;
     button.classList.toggle('is-active', isActive);
-    button.setAttribute('aria-pressed', String(isActive));
+    button.setAttribute('aria-selected', String(isActive));
     button.tabIndex = isActive ? 0 : -1;
     if (isActive && focusButton) {
       button.focus();
@@ -854,8 +879,10 @@ function setStatusBannerActionable(actionable: boolean): void {
   statusBannerEl.dataset.action = actionable ? 'setup' : '';
   statusBannerEl.tabIndex = actionable ? 0 : -1;
   if (actionable) {
-    statusBannerEl.setAttribute('aria-label', 'Open setup');
+    statusBannerEl.setAttribute('role', 'button');
+    statusBannerEl.setAttribute('aria-label', `Open setup guide for ${missingPermissionLabels().join(' and ')}`);
   } else {
+    statusBannerEl.setAttribute('role', 'status');
     statusBannerEl.removeAttribute('aria-label');
   }
 }
@@ -891,9 +918,38 @@ function updateOnboardingStep(): void {
   const isLast = onboardingStepIndex === onboardingStepOrder.length - 1;
   onboardingNextBtn.classList.toggle('hidden', isLast);
   onboardingFinishBtn.classList.toggle('hidden', !isLast);
+  requestAnimationFrame(focusOnboardingStep);
+}
+
+function focusOnboardingStep(): void {
+  if (onboardingModalEl.classList.contains('hidden')) return;
+  const step = onboardingStepOrder[onboardingStepIndex];
+  let target: HTMLElement | null = null;
+  if (step === 'permissions') {
+    if (!onboardingOpenMicrophoneSettingsBtn.disabled) {
+      target = onboardingOpenMicrophoneSettingsBtn;
+    } else if (!onboardingOpenAccessibilitySettingsBtn.disabled) {
+      target = onboardingOpenAccessibilitySettingsBtn;
+    } else {
+      target = onboardingCheckMicrophoneBtn;
+    }
+  } else if (step === 'api') {
+    target = onboardingApiKeyInput.value.trim() ? onboardingApiBaseUrlInput : onboardingApiKeyInput;
+  } else if (step === 'quick-setup') {
+    target = onboardingHotkeyCaptureBtn;
+  } else if (step === 'finish') {
+    target = onboardingFinishBtn;
+  } else {
+    target = onboardingNextBtn;
+  }
+  target?.focus();
 }
 
 function showOnboarding(options: { resetStep?: boolean; step?: OnboardingStepId } = {}): void {
+  if (onboardingModalEl.classList.contains('hidden')) {
+    const activeElement = document.activeElement;
+    preOnboardingFocusEl = activeElement instanceof HTMLElement ? activeElement : null;
+  }
   const resetStep = options.resetStep ?? true;
   if (options.step) {
     onboardingStepIndex = onboardingStepIndexFor(options.step);
@@ -914,6 +970,10 @@ function hideOnboarding(): void {
     stopHotkeyCapture();
   }
   onboardingModalEl.classList.add('hidden');
+  if (preOnboardingFocusEl?.isConnected) {
+    preOnboardingFocusEl.focus();
+  }
+  preOnboardingFocusEl = null;
 }
 
 function runtimeStateLabel(status: RuntimeStatus): string {
@@ -1319,6 +1379,12 @@ function createHotkeyToken(label: string): HTMLSpanElement {
 
 function hotkeyTokenDisplayLabel(token: string): string {
   switch (token) {
+    case 'Cmd':
+      return PLATFORM_IS_MAC ? 'Command' : 'Cmd';
+    case 'Ctrl':
+      return PLATFORM_IS_MAC ? 'Control' : 'Ctrl';
+    case 'Super':
+      return PLATFORM_IS_MAC ? 'Command' : 'Windows';
     case 'Alt':
       return PLATFORM_IS_MAC ? 'Option' : 'Alt';
     case 'Escape':
@@ -1369,7 +1435,10 @@ function renderHotkeyTrigger(button: HTMLButtonElement, hotkey: string, isCaptur
   button.classList.toggle('is-capturing', isCapturing);
   button.setAttribute('aria-pressed', String(isCapturing));
   if (isCapturing) {
-    button.textContent = 'Press keys';
+    const label = document.createElement('span');
+    label.className = 'hotkey-capture-label';
+    label.textContent = 'Press shortcut';
+    button.replaceChildren(label);
     return;
   }
   renderHotkeyValue(button, hotkey);
@@ -1403,8 +1472,12 @@ function renderShortcutEditor(slot: ShortcutSlot): void {
 
     const removeBtn = document.createElement('button');
     removeBtn.type = 'button';
-    removeBtn.className = 'ui-button ui-button-secondary shortcut-remove-btn';
-    removeBtn.textContent = 'Remove';
+    removeBtn.className = 'ui-button ui-button-quiet shortcut-remove-btn icon-only';
+    const actionLabel = slot === 'hold' ? 'hold to speak' : 'hands-free';
+    removeBtn.setAttribute('aria-label', `Remove ${actionLabel} shortcut ${index + 1}`);
+    removeBtn.title = 'Remove shortcut';
+    removeBtn.innerHTML =
+      '<svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 12h14"></path></svg>';
     removeBtn.disabled = shortcuts.length <= 1;
     removeBtn.addEventListener('click', () => {
       const nextConfig = withShortcutValues(
@@ -1427,8 +1500,28 @@ function renderOnboardingHotkeyTrigger(hotkey: string, isCapturing = false): voi
   renderHotkeyTrigger(onboardingHotkeyCaptureBtn, hotkey, isCapturing);
 }
 
-function formatShortcutSummary(shortcuts: string[]): string {
-  return shortcuts.map((shortcut) => normalizeHotkeyInput(shortcut)).join(' / ');
+function renderShortcutSummary(target: HTMLElement, shortcuts: string[]): void {
+  target.replaceChildren();
+  const normalizedShortcuts = shortcuts
+    .map((shortcut) => normalizeHotkeyInput(shortcut).split('+').filter(Boolean))
+    .filter((parts) => parts.length > 0);
+
+  if (normalizedShortcuts.length === 0) {
+    target.append(createHotkeyToken('Not set'));
+    return;
+  }
+
+  normalizedShortcuts.forEach((parts, shortcutIndex) => {
+    if (shortcutIndex > 0) {
+      const separatorEl = document.createElement('span');
+      separatorEl.className = 'shortcut-keyset-separator';
+      separatorEl.textContent = '/';
+      target.append(separatorEl);
+    }
+    parts.forEach((part) => {
+      target.append(createHotkeyToken(hotkeyTokenDisplayLabel(part)));
+    });
+  });
 }
 
 function applyConfigUi(
@@ -1444,8 +1537,8 @@ function applyConfigUi(
   const modeLabel = recordingModeLabel(activeConfig.recording_mode);
   const languageText = languageLabel(activeConfig.language);
 
-  shortcutHoldHintEl.textContent = formatShortcutSummary(activeConfig.hold_hotkeys);
-  shortcutToggleHintEl.textContent = formatShortcutSummary(activeConfig.toggle_hotkeys);
+  renderShortcutSummary(shortcutHoldHintEl, activeConfig.hold_hotkeys);
+  renderShortcutSummary(shortcutToggleHintEl, activeConfig.toggle_hotkeys);
   renderShortcutEditor('hold');
   renderShortcutEditor('toggle');
   renderOnboardingHotkeyTrigger(
@@ -1557,27 +1650,28 @@ async function requestToggleRecording(): Promise<void> {
   if (!beginOptimisticToggleState()) return;
   const optimisticNextState = togglePendingAction === 'starting';
   try {
-    await invoke<void>('toggle_recording');
+    await invokeCommand<void>('toggle_recording');
     clearTogglePendingState(optimisticNextState);
   } catch (error) {
     clearTogglePendingState(Boolean(lastRuntimeStatus?.is_recording));
     if (lastRuntimeStatus) {
       renderStatus(lastRuntimeStatus);
     }
-    setStatusMessage(`Recording could not start or stop: ${String(error)}`);
+    setStatusMessage(`Recording could not start or stop: ${userErrorMessage(error)}`);
   }
 }
 
 function renderFastModeState(formatEnabled: boolean): void {
   const polishingEnabled = formatEnabled;
-  homeFastModeStateEl.textContent = polishingEnabled ? 'ON' : 'OFF';
   homeFastModeBtn.textContent = polishingEnabled ? 'Disable polishing' : 'Enable polishing';
 }
 
 function renderAccessibilityStatus(status: AccessibilityPermissionStatus): void {
   lastAccessibilityStatus = status;
   const label = status.is_supported
-    ? status.is_granted
+    ? status.status === 'dev_terminal'
+      ? 'Dev mode'
+      : status.is_granted
       ? 'Enabled'
       : 'Needs access'
     : 'Unsupported';
@@ -1595,7 +1689,9 @@ function renderAccessibilityStatus(status: AccessibilityPermissionStatus): void 
 function renderMicrophoneStatus(status: MicrophonePermissionStatus): void {
   lastMicrophoneStatus = status;
   const label = status.is_supported
-    ? status.is_granted
+    ? status.status === 'dev_terminal'
+      ? 'Dev mode'
+      : status.is_granted
       ? 'Enabled'
       : status.status === 'unavailable'
         ? 'Unavailable'
@@ -1617,6 +1713,7 @@ function onboardingAccessibilityLabel(status: AccessibilityPermissionStatus | nu
   const appName = APP_BRAND.displayName;
   if (!status) return 'Checking';
   if (!status.is_supported) return 'Accessibility setup is only available on macOS.';
+  if (status.status === 'dev_terminal') return 'Dev mode. Continue setup.';
   if (status.is_granted) return 'Enabled. Continue setup.';
   return `Open Accessibility, turn ${appName} on, then click Check again.`;
 }
@@ -1625,6 +1722,7 @@ function onboardingMicrophoneLabel(status: MicrophonePermissionStatus | null): s
   const appName = APP_BRAND.displayName;
   if (!status) return 'Checking';
   if (!status.is_supported) return 'Microphone setup is only available on macOS.';
+  if (status.status === 'dev_terminal') return 'Dev mode. Continue setup.';
   if (status.is_granted) return 'Enabled. Continue setup.';
   if (status.status === 'not_determined') {
     return 'Click Request access. macOS will show the permission prompt.';
@@ -1653,13 +1751,13 @@ function renderOnboardingPermissionStatuses(): void {
 }
 
 async function checkAndRenderAccessibilityStatus(): Promise<AccessibilityPermissionStatus> {
-  const permissionStatus = await invoke<AccessibilityPermissionStatus>('check_accessibility_permission');
+  const permissionStatus = await invokeCommand<AccessibilityPermissionStatus>('check_accessibility_permission');
   renderAccessibilityStatus(permissionStatus);
   return permissionStatus;
 }
 
 async function checkAndRenderMicrophoneStatus(): Promise<MicrophonePermissionStatus> {
-  const permissionStatus = await invoke<MicrophonePermissionStatus>('check_microphone_permission');
+  const permissionStatus = await invokeCommand<MicrophonePermissionStatus>('check_microphone_permission');
   renderMicrophoneStatus(permissionStatus);
   return permissionStatus;
 }
@@ -1669,10 +1767,10 @@ async function refreshPermissionStatuses(options: { requestAccessibility?: boole
   microphone: MicrophonePermissionStatus;
 }> {
   const [accessibility, microphone] = await Promise.all([
-    invoke<AccessibilityPermissionStatus>(
+    invokeCommand<AccessibilityPermissionStatus>(
       options.requestAccessibility ? 'request_accessibility_permission' : 'check_accessibility_permission'
     ),
-    invoke<MicrophonePermissionStatus>(
+    invokeCommand<MicrophonePermissionStatus>(
       options.requestMicrophone ? 'request_microphone_permission' : 'check_microphone_permission'
     )
   ]);
@@ -1685,14 +1783,18 @@ async function refreshPermissionStatuses(options: { requestAccessibility?: boole
 async function openAccessibilitySettingsFromUi(button: HTMLButtonElement): Promise<void> {
   button.disabled = true;
   try {
-    const permissionStatus = await invoke<AccessibilityPermissionStatus>('request_accessibility_permission');
+    const permissionStatus = await invokeCommand<AccessibilityPermissionStatus>('request_accessibility_permission');
     renderAccessibilityStatus(permissionStatus);
+    if (permissionStatus.status === 'dev_terminal') {
+      setStatusMessage(permissionStatus.guidance);
+      return;
+    }
     if (permissionStatus.is_granted) {
       setStatusMessage('Accessibility enabled.');
       return;
     }
 
-    const message = await invoke<string>('open_accessibility_settings');
+    const message = await invokeCommand<string>('open_accessibility_settings');
     setStatusMessage(message);
     setAccessibilityStatusSummary('Settings opened');
     syncPermissionSetupBanner();
@@ -1710,11 +1812,11 @@ async function openAccessibilitySettingsFromUi(button: HTMLButtonElement): Promi
 async function resetAccessibilityPermissionFromUi(button: HTMLButtonElement): Promise<void> {
   button.disabled = true;
   try {
-    const resetMessage = await invoke<string>('reset_accessibility_permission');
+    const resetMessage = await invokeCommand<string>('reset_accessibility_permission');
     setStatusMessage(resetMessage);
     await openAccessibilitySettingsFromUi(button);
   } catch (error) {
-    setStatusMessage(`Reset did not finish: ${String(error)}`);
+    setStatusMessage(`Reset did not finish: ${userErrorMessage(error)}`);
   } finally {
     button.disabled = false;
   }
@@ -1724,7 +1826,7 @@ async function openMicrophoneSettingsFromUi(button: HTMLButtonElement): Promise<
   button.disabled = true;
   setMicrophoneStatusSummary('Requesting');
   try {
-    const permissionStatus = await invoke<MicrophonePermissionStatus>('request_microphone_permission');
+    const permissionStatus = await invokeCommand<MicrophonePermissionStatus>('request_microphone_permission');
     renderMicrophoneStatus(permissionStatus);
     if (permissionStatus.is_granted) {
       setStatusMessage('Microphone enabled.');
@@ -1739,7 +1841,7 @@ async function openMicrophoneSettingsFromUi(button: HTMLButtonElement): Promise<
       return;
     }
 
-    const message = await invoke<string>('open_microphone_settings');
+    const message = await invokeCommand<string>('open_microphone_settings');
     setStatusMessage(message);
     setMicrophoneStatusSummary('Settings opened');
     syncPermissionSetupBanner();
@@ -1755,15 +1857,15 @@ async function openMicrophoneSettingsFromUi(button: HTMLButtonElement): Promise<
 }
 
 async function ensureOnboardingPermissionsReady(): Promise<boolean> {
-  let accessibility = await invoke<AccessibilityPermissionStatus>('check_accessibility_permission');
-  let microphone = await invoke<MicrophonePermissionStatus>('check_microphone_permission');
+  let accessibility = await invokeCommand<AccessibilityPermissionStatus>('check_accessibility_permission');
+  let microphone = await invokeCommand<MicrophonePermissionStatus>('check_microphone_permission');
 
   if (microphone.is_supported && !microphone.is_granted && microphone.status === 'not_determined') {
-    microphone = await invoke<MicrophonePermissionStatus>('request_microphone_permission');
+    microphone = await invokeCommand<MicrophonePermissionStatus>('request_microphone_permission');
   }
 
   if (accessibility.is_supported && !accessibility.is_granted) {
-    accessibility = await invoke<AccessibilityPermissionStatus>('request_accessibility_permission');
+    accessibility = await invokeCommand<AccessibilityPermissionStatus>('request_accessibility_permission');
   }
 
   renderAccessibilityStatus(accessibility);
@@ -1781,9 +1883,9 @@ async function ensureOnboardingPermissionsReady(): Promise<boolean> {
   );
   syncPermissionSetupBanner();
   if (accessibility.is_supported && !accessibility.is_granted) {
-    await invoke<string>('open_accessibility_settings').catch(() => null);
+    await invokeCommand<string>('open_accessibility_settings').catch(() => null);
   } else if (microphone.is_supported && !microphone.is_granted && microphone.status !== 'not_determined') {
-    await invoke<string>('open_microphone_settings').catch(() => null);
+    await invokeCommand<string>('open_microphone_settings').catch(() => null);
   }
   return false;
 }
@@ -1959,9 +2061,9 @@ function setActiveHotkeyCaptureValidation(target: HotkeyCaptureTarget, message: 
 }
 
 function syncHotkeyCaptureRegistration(active: boolean, target: HotkeyCaptureTarget): void {
-  void invoke<void>('set_hotkey_capture_mode', { active }).catch((error) => {
+  void invokeCommand<void>('set_hotkey_capture_mode', { active }).catch((error) => {
     if (!active || !sameCaptureTarget(activeHotkeyCaptureTarget, target)) return;
-    setActiveHotkeyCaptureValidation(target, String(error), false);
+    setActiveHotkeyCaptureValidation(target, userErrorMessage(error), false);
   });
 }
 
@@ -2060,14 +2162,12 @@ function setupHotkeyCapture(): void {
 
 async function saveSettingsPayload(payload: Settings, successMessage = 'Saved settings.'): Promise<boolean> {
   try {
-    console.log('[settings] save attempt', payload);
     setStatusMessage('Saving settings');
-    await invoke('save_settings', { settings: payload });
+    await invokeCommand('save_settings', { settings: payload });
     const [savedSettings, runtimeStatus] = await Promise.all([
-      invoke<Settings>('get_settings'),
-      invoke<RuntimeStatus>('get_runtime_status')
+      invokeCommand<Settings>('get_settings'),
+      invokeCommand<RuntimeStatus>('get_runtime_status')
     ]);
-    console.log('[settings] save success', savedSettings);
     applyConfigUi({
       hold_hotkeys: savedSettings.hold_hotkeys,
       toggle_hotkeys: savedSettings.toggle_hotkeys,
@@ -2085,8 +2185,7 @@ async function saveSettingsPayload(payload: Settings, successMessage = 'Saved se
     renderShortcutDirtyState();
     return true;
   } catch (error) {
-    console.error('[settings] save failed', error);
-    const errorText = String(error);
+    const errorText = userErrorMessage(error);
     const normalizedError = errorText.toLowerCase();
     if (isShortcutRelatedMessage(errorText)) {
       focusShortcutSettings();
@@ -2187,7 +2286,7 @@ function computeHistoryStats(entries: TranscriptHistoryEntry[]): {
 }
 
 async function copyTextWithStatus(text: string, successMessage: string): Promise<void> {
-  await invoke('copy_text_to_clipboard', { text });
+  await invokeCommand('copy_text_to_clipboard', { text });
   setStatusMessage(successMessage);
 }
 
@@ -2241,12 +2340,12 @@ async function handleHistoryEntryCopy(entry: TranscriptHistoryEntry): Promise<vo
   historySelectedEntryId = entry.id;
   renderHistory(historyEntries);
   try {
-    await invoke('copy_text_to_clipboard', { text: entry.final_output });
+    await invokeCommand('copy_text_to_clipboard', { text: entry.final_output });
     markHistoryEntryCopied(entry.id);
-    showAppToast('Copied');
+    showAppToast('Copied transcript');
   } catch (error) {
     showAppToast('Copy failed', 'error');
-    setStatusMessage(`Copy failed: ${String(error)}`);
+    setStatusMessage(`Copy failed: ${userErrorMessage(error)}`);
   } finally {
     renderHistory(historyEntries);
   }
@@ -2258,7 +2357,6 @@ function createTranscriptRow(
     active?: boolean;
     staticMain?: boolean;
     onMainClick?: (() => void) | null;
-    actionMode?: TranscriptRowActionMode;
     isCopied?: boolean;
   } = {}
 ): HTMLDivElement {
@@ -2297,11 +2395,9 @@ function createTranscriptRow(
   bodyEl.append(textEl);
   mainEl.append(timeEl, bodyEl);
 
-  const actionsEl = document.createElement('div');
-  actionsEl.className = 'history-row-actions';
-  const actionMode = options.actionMode ?? 'button';
-
-  if (actionMode === 'indicator') {
+  if (onMainClick) {
+    const actionsEl = document.createElement('div');
+    actionsEl.className = 'history-row-actions';
     const indicatorEl = document.createElement('span');
     indicatorEl.className = 'history-row-indicator';
 
@@ -2328,30 +2424,11 @@ function createTranscriptRow(
     indicatorEl.classList.add(options.isCopied ? 'is-copied' : 'is-idle');
     indicatorEl.append(iconEl, labelEl);
     actionsEl.append(indicatorEl);
-  } else {
-    const copyBtn = document.createElement('button');
-    copyBtn.type = 'button';
-    copyBtn.className = 'history-copy-btn';
-    copyBtn.textContent = 'Copy';
-    copyBtn.setAttribute(
-      'aria-label',
-      `Copy transcript from ${formatHistoryDayLabel(entry.created_at_ms)} at ${formatHistoryTime(entry.created_at_ms)}`
-    );
-    copyBtn.addEventListener('click', async (event) => {
-      event.stopPropagation();
-      copyBtn.disabled = true;
-      try {
-        await copyTextWithStatus(entry.final_output, 'Transcript copied to clipboard.');
-      } catch (error) {
-        setStatusMessage(`Copy failed: ${String(error)}`);
-      } finally {
-        copyBtn.disabled = false;
-      }
-    });
-    actionsEl.append(copyBtn);
+    rowEl.append(mainEl, actionsEl);
+    return rowEl;
   }
 
-  rowEl.append(mainEl, actionsEl);
+  rowEl.append(mainEl);
   return rowEl;
 }
 
@@ -2369,7 +2446,15 @@ function renderHomeOverview(): void {
   }
 
   for (const entry of recentEntries) {
-    homeRecentFeedEl.append(createTranscriptRow(entry, { staticMain: true }));
+    homeRecentFeedEl.append(
+      createTranscriptRow(entry, {
+        active: entry.id === historySelectedEntryId,
+        isCopied: entry.id === historyCopiedEntryId,
+        onMainClick: () => {
+          void handleHistoryEntryCopy(entry);
+        }
+      })
+    );
   }
 }
 
@@ -2462,10 +2547,11 @@ function renderHistory(entries: TranscriptHistoryEntry[]): void {
   historyFeedEl.innerHTML = '';
   historyEmptyEl.hidden = visibleEntries.length > 0;
   if (visibleEntries.length === 0) {
-    historyEmptyEl.textContent = historyEntries.length === 0 ? 'No transcript history yet.' : 'No matching transcripts.';
+    historyEmptyEl.textContent =
+      historyEntries.length === 0 ? 'No transcripts yet. Record once from Home or with your shortcut.' : 'No matches.';
     return;
   }
-  historyEmptyEl.textContent = 'No transcript history yet.';
+  historyEmptyEl.textContent = 'No transcripts yet. Record once from Home or with your shortcut.';
 
   const groupedEntries = groupHistoryEntries(visibleEntries);
   let selectedRow: HTMLDivElement | null = null;
@@ -2484,7 +2570,6 @@ function renderHistory(entries: TranscriptHistoryEntry[]): void {
     for (const entry of group.entries) {
       const rowEl = createTranscriptRow(entry, {
         active: entry.id === historySelectedEntryId,
-        actionMode: 'indicator',
         isCopied: entry.id === historyCopiedEntryId,
         onMainClick: () => {
           void handleHistoryEntryCopy(entry);
@@ -2510,12 +2595,12 @@ function renderHistory(entries: TranscriptHistoryEntry[]): void {
 }
 
 async function loadHistory(): Promise<void> {
-  const entries = await invoke<TranscriptHistoryEntry[]>('get_transcript_history');
+  const entries = await invokeCommand<TranscriptHistoryEntry[]>('get_transcript_history');
   renderHistory(entries);
 }
 
 async function loadInitial(): Promise<void> {
-  const settings = await invoke<Settings>('get_settings');
+  const settings = await invokeCommand<Settings>('get_settings');
   apiKeyInput.value = settings.api_key;
   promptTemplateInput.value = settings.prompt_template || defaultPrompt;
   updateSavedShortcutConfig({
@@ -2549,15 +2634,15 @@ async function loadInitial(): Promise<void> {
   validateSettingsHotkeyInput('hold');
   validateSettingsHotkeyInput('toggle');
 
-  const status = await invoke<RuntimeStatus>('get_runtime_status');
+  const status = await invokeCommand<RuntimeStatus>('get_runtime_status');
   renderStatus(status);
   if (isShortcutRelatedMessage(status.last_message)) {
     focusShortcutSettings();
   }
   await loadHistory();
-  const draft = await invoke<DurableDraft | null>('get_durable_draft');
+  const draft = await invokeCommand<DurableDraft | null>('get_durable_draft');
   renderDurableDraft(draft);
-  lastDebugLogLines = await invoke<string[]>('get_debug_log');
+  lastDebugLogLines = await invokeCommand<string[]>('get_debug_log');
 
   setAccessibilityStatusSummary('Checking');
   setMicrophoneStatusSummary('Checking');
@@ -2605,23 +2690,16 @@ languageInput.addEventListener('change', () => {
 
 form.addEventListener('submit', async (event) => {
   event.preventDefault();
-  console.log('[settings] submit');
   const holdHotkeyError = validateSettingsHotkeyInput('hold');
   const toggleHotkeyError = validateSettingsHotkeyInput('toggle');
   const hotkeyError = holdHotkeyError || toggleHotkeyError || validateDistinctHotkeys();
   if (hotkeyError) {
-    console.warn('[settings] validation failed', {
-      holdHotkeyError,
-      toggleHotkeyError,
-      hotkeyError
-    });
     focusShortcutSettings();
     setStatusMessage(hotkeyError);
     return;
   }
 
   const payload = readSettingsFromForm();
-  console.log('[settings] submit payload', payload);
   await saveSettingsPayload(payload);
 });
 
@@ -2642,8 +2720,8 @@ homeFastModeBtn.addEventListener('click', async () => {
     format_enabled: nextFormatEnabled
   };
   const successMessage = nextFormatEnabled
-    ? 'Additional polishing enabled.'
-    : 'Additional polishing disabled. Transcription will be inserted directly.';
+    ? 'Polishing enabled.'
+    : 'Polishing disabled. Verba will insert raw transcription.';
   const saved = await saveSettingsPayload(payload, successMessage);
   if (!saved) {
     renderFastModeState(formatEnabledInput.checked);
@@ -2657,7 +2735,7 @@ draftRestoreCopyBtn.addEventListener('click', async () => {
   try {
     await copyTextWithStatus(durableDraft.text, 'Recovered draft copied to clipboard.');
   } catch (error) {
-    setStatusMessage(`Copy failed: ${String(error)}`);
+    setStatusMessage(`Copy failed: ${userErrorMessage(error)}`);
   } finally {
     draftRestoreCopyBtn.disabled = false;
   }
@@ -2666,10 +2744,10 @@ draftRestoreCopyBtn.addEventListener('click', async () => {
 draftRestoreDismissBtn.addEventListener('click', async () => {
   draftRestoreDismissBtn.disabled = true;
   try {
-    await invoke('clear_durable_draft');
+    await invokeCommand('clear_durable_draft');
     setStatusMessage('Saved draft discarded.');
   } catch (error) {
-    setStatusMessage(`Draft was not discarded: ${String(error)}`);
+    setStatusMessage(`Draft was not discarded: ${userErrorMessage(error)}`);
   } finally {
     draftRestoreDismissBtn.disabled = false;
   }
@@ -2680,11 +2758,11 @@ testApiBtn.addEventListener('click', async () => {
   setStatusMessage('Checking API');
   setApiDiagnosticsStatus('testing', 'Checking API');
   try {
-    const result = await invoke<string>('test_api_connection');
+    const result = await invokeCommand<string>('test_api_connection');
     setApiDiagnosticsStatus('passed', result);
     setStatusMessage(result);
   } catch (error) {
-    const message = String(error);
+    const message = userErrorMessage(error);
     setApiDiagnosticsStatus('failed', message);
     setStatusMessage(message);
   } finally {
@@ -2738,6 +2816,13 @@ reopenOnboardingBtn.addEventListener('click', () => {
 });
 
 onboardingSkipBtn.addEventListener('click', () => {
+  hideOnboarding();
+  setStatusMessage('Setup paused. Reopen the setup guide from Settings.');
+});
+
+onboardingModalEl.addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape' || activeHotkeyCaptureTarget) return;
+  event.preventDefault();
   hideOnboarding();
   setStatusMessage('Setup paused. Reopen the setup guide from Settings.');
 });
@@ -2833,14 +2918,14 @@ copyDiagnosticsBtn.addEventListener('click', async () => {
   copyDiagnosticsBtn.disabled = true;
   setDiagnosticsCopyStatus('Copying diagnostics...');
   try {
-    lastDebugLogLines = await invoke<string[]>('get_debug_log');
-    await invoke('copy_text_to_clipboard', { text: buildDiagnosticsReport(lastDebugLogLines) });
+    lastDebugLogLines = await invokeCommand<string[]>('get_debug_log');
+    await invokeCommand('copy_text_to_clipboard', { text: buildDiagnosticsReport(lastDebugLogLines) });
     const copiedAt = new Date().toLocaleTimeString();
     setDiagnosticsCopyStatus(`Copied at ${copiedAt}.`, 'success');
     setStatusMessage('Diagnostics copied to clipboard.');
   } catch (error) {
-    setDiagnosticsCopyStatus(`Copy failed: ${String(error)}`, 'error');
-    setStatusMessage(`Copy failed: ${String(error)}`);
+    setDiagnosticsCopyStatus(`Copy failed: ${userErrorMessage(error)}`, 'error');
+    setStatusMessage(`Copy failed: ${userErrorMessage(error)}`);
   } finally {
     copyDiagnosticsBtn.disabled = false;
   }
@@ -2859,26 +2944,26 @@ statusBannerEl.addEventListener('keydown', (event) => {
   showPermissionOnboarding();
 });
 
-listen<TranscriptHistoryEntry[]>('transcript-history-updated', (event) => {
+listenEvent<TranscriptHistoryEntry[]>('transcript-history-updated', (event) => {
   renderHistory(event.payload);
 }).catch((error) => {
-  setStatusMessage(`History listener failed: ${String(error)}`);
+  setStatusMessage(`History listener failed: ${userErrorMessage(error)}`);
 });
 
 historySearchInput.addEventListener('input', () => {
   renderHistory(historyEntries);
 });
 
-listen<DurableDraft | null>('durable-draft-updated', (event) => {
+listenEvent<DurableDraft | null>('durable-draft-updated', (event) => {
   renderDurableDraft(event.payload);
 }).catch((error) => {
-  setStatusMessage(`Draft listener failed: ${String(error)}`);
+  setStatusMessage(`Draft listener failed: ${userErrorMessage(error)}`);
 });
 
-listen<RuntimeStatus>('runtime-status', (event) => {
+listenEvent<RuntimeStatus>('runtime-status', (event) => {
   renderStatus(event.payload);
 }).catch((error) => {
-  setStatusMessage(`Status listener failed: ${String(error)}`);
+  setStatusMessage(`Status listener failed: ${userErrorMessage(error)}`);
 });
 
 setupTabs();
@@ -2890,5 +2975,9 @@ applyBranding();
 syncStatusBannerFromText();
 
 loadInitial().catch((error) => {
-  setStatusMessage(`Initialization failed: ${String(error)}`);
+  if (!isTauriRuntime()) {
+    setStatusMessage(TAURI_RUNTIME_MISSING_MESSAGE);
+    return;
+  }
+  setStatusMessage(`Initialization failed: ${userErrorMessage(error)}`);
 });

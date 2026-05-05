@@ -1,11 +1,11 @@
 {
-  "displayName": "Keylesss",
-  "legalName": "Keylesss",
-  "packageName": "keylesss",
-  "bundleIdentifier": "com.keylesss.desktop",
+  "displayName": "Verba",
+  "legalName": "Verba",
+  "packageName": "verba",
+  "bundleIdentifier": "com.verba.desktop",
   "macOSSigningIdentity": "-",
-  "storagePrefix": "keylesss",
-  "logPrefix": "keylesss",
-  "tempFilePrefix": "keylesss",
+  "storagePrefix": "verba",
+  "logPrefix": "verba",
+  "tempFilePrefix": "verba",
   "microphoneUsageDescription": "{displayName} records microphone audio so it can transcribe your dictation."
 }

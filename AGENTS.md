@@ -1,12 +1,12 @@
-# Keylesss Agent Guide
+# Verba Agent Guide
 
-This file is the UI/UX source of truth for agents working on Keylesss.
+This file is the UI/UX source of truth for agents working on Verba.
 
 If a future task touches layout, styling, interaction design, copy, or information architecture, follow this document before introducing new UI.
 
 ## Product Posture
 
-Keylesss should feel like a calm desktop app, not a busy SaaS dashboard.
+Verba should feel like a calm desktop app, not a busy SaaS dashboard.
 
 The app exists to support one primary workflow:
 1. Start dictation quickly.
@@ -262,6 +262,9 @@ Better examples:
 - "API ok"
 - "API failed"
 - "Checking..."
+- "Dev mode"
+
+Never show setup instructions in a success state. Keep next-step copy for blocked, failed, or explicitly opened diagnostics states.
 
 ## Component Guidance
 
@@ -391,5 +394,6 @@ Before shipping UI work, verify:
 Before finalizing a fix, explicitly validate these points:
 - surface-fix check: does this only patch the visible symptom while leaving the root cause in place, adding complexity, or creating new failure modes elsewhere?
 - affected-code review: list the other code paths touched by the change, then review them one by one for bad implications, regressions, or policy mismatches
+- impeccable distill check: for any UI, layout, onboarding, settings, status, or copy change, apply `$impeccable distill [target]` before finalizing. Remove nonessential words, duplicate guidance, decorative wrappers, and default-visible diagnostics. Success states should be labels, not instructions.
 
 Prefer the fix that reduces system complexity and resolves the issue at the correct boundary, not the smallest local patch if that patch spreads special cases.

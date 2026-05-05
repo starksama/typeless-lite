@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Keylesss",
+  "productName": "Verba",
   "version": "0.1.0",
-  "identifier": "com.keylesss.desktop",
+  "identifier": "com.verba.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build",
@@ -13,7 +13,7 @@
     "macOSPrivateApi": true,
     "windows": [
       {
-        "title": "Keylesss",
+        "title": "Verba",
         "width": 1360,
         "height": 900,
         "minWidth": 1120,

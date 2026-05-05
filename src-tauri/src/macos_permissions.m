@@ -2,7 +2,7 @@
 #import <ApplicationServices/ApplicationServices.h>
 #import <dispatch/dispatch.h>
 
-bool keylesss_accessibility_is_trusted(bool prompt) {
+bool verba_accessibility_is_trusted(bool prompt) {
   if (prompt) {
     NSDictionary *options = @{
       (__bridge id)kAXTrustedCheckOptionPrompt: @YES
@@ -13,7 +13,7 @@ bool keylesss_accessibility_is_trusted(bool prompt) {
   return AXIsProcessTrusted();
 }
 
-int keylesss_microphone_authorization_status(void) {
+int verba_microphone_authorization_status(void) {
   SEL selector = @selector(authorizationStatusForMediaType:);
   if ([AVCaptureDevice respondsToSelector:selector]) {
     AVAuthorizationStatus status = [AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeAudio];
@@ -23,7 +23,7 @@ int keylesss_microphone_authorization_status(void) {
   return 3;
 }
 
-bool keylesss_request_microphone_access(void) {
+bool verba_request_microphone_access(void) {
   SEL selector = @selector(requestAccessForMediaType:completionHandler:);
   if ([AVCaptureDevice respondsToSelector:selector]) {
     __block BOOL granted = NO;

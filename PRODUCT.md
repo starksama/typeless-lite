@@ -6,11 +6,11 @@ product
 
 ## Users
 
-Keylesss is for macOS users who write constantly across other apps and want speech to become usable text without switching context. They are usually in a focused work session, speaking into a laptop microphone or headset, then returning the output to a document, chat, browser, terminal, or editor.
+Verba is for macOS users who write constantly across other apps and want speech to become usable text without switching context. They are usually in a focused work session, speaking into a laptop microphone or headset, then returning the output to a document, chat, browser, terminal, or editor.
 
 ## Product Purpose
 
-Keylesss starts dictation quickly, transcribes speech, optionally polishes the text, and inserts it into the app the user was already using. Success means a new user can grant permissions, add an API key, set a shortcut, and produce their first transcript without hunting through settings.
+Verba starts dictation quickly, transcribes speech, optionally polishes the text, and inserts it into the app the user was already using. Success means a new user can grant permissions, add an API key, set a shortcut, and produce their first transcript without hunting through settings.
 
 ## Brand Personality
 

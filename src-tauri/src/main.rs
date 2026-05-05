@@ -28,6 +28,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
+    utils::config::Color,
     AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder,
 };
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
@@ -309,7 +310,7 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             display_name: "Desktop Dictation".to_string(),
-            bundle_identifier: "com.keylesss.desktop".to_string(),
+            bundle_identifier: "com.verba.desktop".to_string(),
             log_prefix: "app".to_string(),
             temp_file_prefix: "app".to_string(),
         }
@@ -334,6 +335,69 @@ fn app_log_prefix() -> &'static str {
 
 fn app_temp_file_prefix() -> &'static str {
     app_config().temp_file_prefix.as_str()
+}
+
+#[cfg(target_os = "macos")]
+fn macos_current_exe_path() -> String {
+    std::env::current_exe()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|_| "unknown".to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn macos_running_from_app_bundle() -> bool {
+    std::env::current_exe()
+        .ok()
+        .map(|path| {
+            path.ancestors().any(|ancestor| {
+                ancestor
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    .map(|extension| extension.eq_ignore_ascii_case("app"))
+                    .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false)
+}
+
+#[cfg(target_os = "macos")]
+fn macos_unbundled_dev_runtime() -> bool {
+    cfg!(debug_assertions) && !macos_running_from_app_bundle()
+}
+
+#[cfg(target_os = "macos")]
+fn terminal_permission_owner_label_from_env(term_program: Option<&str>) -> String {
+    match term_program.unwrap_or("").to_ascii_lowercase().as_str() {
+        "warpterminal" | "warp" => "Warp".to_string(),
+        "iterm.app" | "iterm2" => "iTerm".to_string(),
+        "apple_terminal" | "terminal" => "Terminal".to_string(),
+        "" => "the terminal running yarn tauri:dev".to_string(),
+        value => value.to_string(),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn terminal_permission_owner_label() -> String {
+    terminal_permission_owner_label_from_env(std::env::var("TERM_PROGRAM").ok().as_deref())
+}
+
+#[cfg(target_os = "macos")]
+fn accessibility_permission_owner_label() -> String {
+    if macos_unbundled_dev_runtime() {
+        terminal_permission_owner_label()
+    } else {
+        app_display_name().to_string()
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_runtime_identity_summary() -> String {
+    format!(
+        "runtime_identity exe={} app_bundle={} dev_terminal_microphone={}",
+        macos_current_exe_path(),
+        macos_running_from_app_bundle(),
+        macos_unbundled_dev_runtime()
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -727,7 +791,11 @@ fn check_accessibility_permission() -> AccessibilityPermissionStatus {
 fn request_accessibility_permission() -> AccessibilityPermissionStatus {
     #[cfg(target_os = "macos")]
     {
-        accessibility_status_from_macos_trust(unsafe { keylesss_accessibility_is_trusted(true) })
+        if macos_unbundled_dev_runtime() {
+            return dev_terminal_accessibility_permission_status();
+        }
+
+        accessibility_status_from_macos_trust(unsafe { verba_accessibility_is_trusted(true) })
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -739,7 +807,11 @@ fn request_accessibility_permission() -> AccessibilityPermissionStatus {
 fn current_accessibility_permission_status() -> AccessibilityPermissionStatus {
     #[cfg(target_os = "macos")]
     {
-        accessibility_status_from_macos_trust(unsafe { keylesss_accessibility_is_trusted(false) })
+        if macos_unbundled_dev_runtime() {
+            return dev_terminal_accessibility_permission_status();
+        }
+
+        accessibility_status_from_macos_trust(unsafe { verba_accessibility_is_trusted(false) })
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -751,6 +823,18 @@ fn current_accessibility_permission_status() -> AccessibilityPermissionStatus {
             status: "unsupported".to_string(),
             guidance: "Accessibility setup is available on macOS only.".to_string(),
         }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn dev_terminal_accessibility_permission_status() -> AccessibilityPermissionStatus {
+    let terminal_name = terminal_permission_owner_label();
+    AccessibilityPermissionStatus {
+        platform: "macOS".to_string(),
+        is_supported: true,
+        is_granted: true,
+        status: "dev_terminal".to_string(),
+        guidance: format!("Dev mode: {terminal_name} owns text insertion access."),
     }
 }
 
@@ -782,7 +866,11 @@ fn accessibility_status_from_macos_trust(is_trusted: bool) -> AccessibilityPermi
 fn open_accessibility_settings() -> Result<String, String> {
     #[cfg(target_os = "macos")]
     {
-        let app_name = app_display_name();
+        let app_name = if macos_unbundled_dev_runtime() {
+            terminal_permission_owner_label()
+        } else {
+            app_display_name().to_string()
+        };
         let urls = [
             "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
             "x-apple.systempreferences:com.apple.preference.security?Privacy",
@@ -812,6 +900,13 @@ fn open_accessibility_settings() -> Result<String, String> {
 fn reset_accessibility_permission() -> Result<String, String> {
     #[cfg(target_os = "macos")]
     {
+        if macos_unbundled_dev_runtime() {
+            return Ok(format!(
+                "Dev mode uses {} in Accessibility.",
+                terminal_permission_owner_label()
+            ));
+        }
+
         let output = Command::new("tccutil")
             .args(["reset", "Accessibility", app_bundle_identifier()])
             .output()
@@ -881,21 +976,41 @@ fn request_microphone_permission(state: State<AppState>) -> MicrophonePermission
     request_microphone_permission_status()
 }
 
+#[cfg(target_os = "macos")]
+fn dev_terminal_microphone_permission_status() -> MicrophonePermissionStatus {
+    let terminal_name = terminal_permission_owner_label();
+    MicrophonePermissionStatus {
+        platform: "macOS".to_string(),
+        is_supported: true,
+        is_granted: true,
+        status: "dev_terminal".to_string(),
+        guidance: format!("Dev mode: {terminal_name} owns recording access."),
+    }
+}
+
 fn current_microphone_permission_status() -> MicrophonePermissionStatus {
-    microphone_status_from_macos_authorization(unsafe {
-        keylesss_microphone_authorization_status()
-    })
+    #[cfg(target_os = "macos")]
+    if macos_unbundled_dev_runtime() {
+        return dev_terminal_microphone_permission_status();
+    }
+
+    microphone_status_from_macos_authorization(unsafe { verba_microphone_authorization_status() })
 }
 
 fn request_microphone_permission_status() -> MicrophonePermissionStatus {
-    let status = unsafe { keylesss_microphone_authorization_status() };
+    #[cfg(target_os = "macos")]
+    if macos_unbundled_dev_runtime() {
+        return dev_terminal_microphone_permission_status();
+    }
+
+    let status = unsafe { verba_microphone_authorization_status() };
     if status == MACOS_AV_AUTHORIZATION_NOT_DETERMINED {
-        let granted = unsafe { keylesss_request_microphone_access() };
+        let granted = unsafe { verba_request_microphone_access() };
         return if granted {
             microphone_status_from_macos_authorization(MACOS_AV_AUTHORIZATION_AUTHORIZED)
         } else {
             microphone_status_from_macos_authorization(unsafe {
-                keylesss_microphone_authorization_status()
+                verba_microphone_authorization_status()
             })
         };
     }
@@ -954,9 +1069,9 @@ fn microphone_status_from_macos_authorization(status: i32) -> MicrophonePermissi
 }
 
 unsafe extern "C" {
-    fn keylesss_accessibility_is_trusted(prompt: bool) -> bool;
-    fn keylesss_microphone_authorization_status() -> i32;
-    fn keylesss_request_microphone_access() -> bool;
+    fn verba_accessibility_is_trusted(prompt: bool) -> bool;
+    fn verba_microphone_authorization_status() -> i32;
+    fn verba_request_microphone_access() -> bool;
 }
 
 #[tauri::command]
@@ -1352,20 +1467,33 @@ fn ensure_overlay_window(app: &AppHandle) -> Result<(), String> {
     .skip_taskbar(true)
     .always_on_top(true)
     .visible_on_all_workspaces(true)
+    .visible(false)
     .focused(false)
     .focusable(false)
+    .background_color(Color(0, 0, 0, 0))
     .build()
     .map_err(|e| format!("Failed to create overlay window: {e}"))?;
 
     let _ = window.set_ignore_cursor_events(true);
     let _ = window.set_always_on_top(true);
     let _ = window.set_visible_on_all_workspaces(true);
+    let _ = window.set_background_color(Some(Color(0, 0, 0, 0)));
     eprintln!(
         "[{}] overlay_window_ready x={x} y={y} width={OVERLAY_WINDOW_WIDTH} height={OVERLAY_WINDOW_HEIGHT}",
         app_log_prefix()
     );
 
     Ok(())
+}
+
+fn destroy_overlay_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window(OVERLAY_WINDOW_LABEL) {
+        let _ = window.set_always_on_top(false);
+        let _ = window.set_visible_on_all_workspaces(false);
+        let _ = window.hide();
+        let _ = window.destroy();
+        eprintln!("[{}] overlay_window_destroyed", app_log_prefix());
+    }
 }
 
 fn sync_overlay_window_visibility(app: &AppHandle, status: &RuntimeStatus) {
@@ -1382,9 +1510,7 @@ fn sync_overlay_window_visibility(app: &AppHandle, status: &RuntimeStatus) {
         return;
     }
 
-    if let Some(window) = app.get_webview_window(OVERLAY_WINDOW_LABEL) {
-        let _ = window.hide();
-    }
+    destroy_overlay_window(app);
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1733,7 +1859,7 @@ mod audio_capture_tests {
 
         let error = validate_audio_capture(&path).expect_err("empty audio should be rejected");
 
-        assert!(error.to_string().contains("No microphone audio"));
+        assert!(error.to_string().contains("Microphone"));
         let _ = fs::remove_file(path);
     }
 
@@ -1796,6 +1922,8 @@ mod settings_compat_tests {
 
 #[cfg(all(test, target_os = "macos"))]
 mod permission_status_tests {
+    #[cfg(target_os = "macos")]
+    use super::terminal_permission_owner_label_from_env;
     use super::{
         accessibility_status_from_macos_trust, microphone_status_from_macos_authorization,
         MACOS_AV_AUTHORIZATION_DENIED, MACOS_AV_AUTHORIZATION_NOT_DETERMINED,
@@ -1830,6 +1958,31 @@ mod permission_status_tests {
         assert_eq!(denied.status, "denied");
         assert!(denied.guidance.contains("turn"));
         assert!(denied.guidance.contains("If it is missing"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn dev_terminal_permission_owner_copy_names_common_terminals() {
+        assert_eq!(
+            terminal_permission_owner_label_from_env(Some("WarpTerminal")),
+            "Warp"
+        );
+        assert_eq!(
+            terminal_permission_owner_label_from_env(Some("iTerm.app")),
+            "iTerm"
+        );
+        assert!(terminal_permission_owner_label_from_env(None)
+            .contains("terminal running yarn tauri:dev"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn dev_terminal_accessibility_status_uses_terminal_owner() {
+        let status = super::dev_terminal_accessibility_permission_status();
+        assert!(status.is_granted);
+        assert_eq!(status.status, "dev_terminal");
+        assert!(status.guidance.contains("text insertion"));
+        assert!(status.guidance.contains("Dev mode"));
     }
 }
 
@@ -2198,11 +2351,11 @@ fn start_recording(
     let host = cpal::default_host();
     let device = host
         .default_input_device()
-        .ok_or_else(|| AppError::Message("No default input device found".to_string()))?;
+        .ok_or_else(|| AppError::Message(microphone_capture_unavailable_message()))?;
 
-    let supported_config = device
-        .default_input_config()
-        .map_err(|e| AppError::Message(format!("No default input config: {e}")))?;
+    let supported_config = device.default_input_config().map_err(|e| {
+        AppError::Message(format!("{} {e}", microphone_capture_unavailable_message()))
+    })?;
 
     let config: cpal::StreamConfig = supported_config.clone().into();
 
@@ -2457,15 +2610,23 @@ fn analyze_wav_capture(wav_path: &Path) -> Result<AudioCaptureStats, AppError> {
     })
 }
 
+fn microphone_capture_unavailable_message() -> String {
+    #[cfg(target_os = "macos")]
+    if macos_unbundled_dev_runtime() {
+        let terminal_name = terminal_permission_owner_label();
+        return format!("Enable {terminal_name} Microphone, then restart dev.");
+    }
+
+    format!(
+        "No microphone input is available. Check macOS Microphone permission for {}, then try again.",
+        app_display_name()
+    )
+}
+
 fn validate_audio_capture(wav_path: &Path) -> Result<AudioCaptureStats, AppError> {
     let stats = analyze_wav_capture(wav_path)?;
     if stats.sample_count == 0 || stats.duration_ms < MIN_CAPTURED_AUDIO_MS {
-        return Err(AppError::Message(
-            format!(
-                "No microphone audio was captured. Check macOS Microphone permission for {}, then try again.",
-                app_display_name()
-            ),
-        ));
+        return Err(AppError::Message(microphone_capture_unavailable_message()));
     }
     if stats.rms < MIN_CAPTURE_RMS && stats.peak < MIN_CAPTURE_PEAK {
         return Err(AppError::Message(
@@ -3537,8 +3698,9 @@ fn type_text_via_applescript(text: &str) -> Result<(), AppError> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let owner = accessibility_permission_owner_label();
         return Err(AppError::Message(format!(
-            "Terminal typing fallback failed. Check Accessibility permissions. {stderr}"
+            "Enable {owner} Accessibility, then try again. {stderr}"
         )));
     }
 
@@ -3707,7 +3869,7 @@ fn paste_text(
                 return Err(AppError::Message(
                     format!(
                         "Paste failed because Accessibility permission is missing. Open System Settings > Privacy & Security > Accessibility and enable {}, then use the app's Open Accessibility Settings button to jump there.",
-                        app_display_name()
+                        accessibility_permission_owner_label()
                     ),
                 ));
             }
@@ -3814,6 +3976,9 @@ fn main() {
             app.manage(state);
 
             let app_state: State<AppState> = app.state();
+            #[cfg(target_os = "macos")]
+            debug_log_state(&app_state, macos_runtime_identity_summary());
+
             match register_shortcuts_strict(
                 app.handle(),
                 &app_state,

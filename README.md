@@ -1,10 +1,10 @@
-# Keylesss
+# Verba
 
 Open-source desktop dictation for macOS.
 
 Built for one job: press a global shortcut, speak, and get clean text inserted back into the app you were already using.
 
-![Keylesss screenshot](docs/github/screenshot.png)
+![Verba screenshot](docs/github/screenshot.png)
 
 ## What it does
 
@@ -19,7 +19,7 @@ Built for one job: press a global shortcut, speak, and get clean text inserted b
 
 ## Who it is for
 
-- people who want a Keylesss / Wispr Flow style tool they can run themselves
+- people who want a Verba / Wispr Flow style tool they can run themselves
 - people who want control over models, prompts, API base URL, and shortcuts
 - people who want a cleaner desktop app instead of a settings-heavy dashboard
 

@@ -1,5 +1,5 @@
 [package]
-name = "keylesss"
+name = "verba"
 version = "0.1.0"
 description = "Minimal macOS desktop dictation app"
 authors = ["anton"]
