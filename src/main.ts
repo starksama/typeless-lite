@@ -3,7 +3,17 @@ import { listen } from '@tauri-apps/api/event';
 import { APP_BRAND } from './app-config';
 
 type RecordingMode = 'hold' | 'toggle';
-type TranscriptionLanguage = 'auto' | 'en' | 'zh' | 'zh-TW' | 'ja' | 'ko' | 'es' | 'fr' | 'de';
+type TranscriptionLanguage =
+  | 'auto'
+  | 'en'
+  | 'zh'
+  | 'zh-CN'
+  | 'zh-TW'
+  | 'ja'
+  | 'ko'
+  | 'es'
+  | 'fr'
+  | 'de';
 
 type Settings = {
   api_key: string;
@@ -111,8 +121,9 @@ function userErrorMessage(error: unknown): string {
 const LANGUAGE_LABELS: Record<TranscriptionLanguage, string> = {
   auto: 'Auto',
   en: 'English (en)',
-  zh: 'Chinese Simplified (zh)',
-  'zh-TW': 'Chinese Traditional (zh-TW)',
+  zh: 'Chinese (Simplified)',
+  'zh-CN': 'Chinese (Simplified)',
+  'zh-TW': 'Chinese (Traditional)',
   ja: 'Japanese (ja)',
   ko: 'Korean (ko)',
   es: 'Spanish (es)',
@@ -1039,6 +1050,13 @@ function normalizeMode(mode: string): RecordingMode {
 }
 
 function normalizeLanguage(language: string): TranscriptionLanguage {
+  const normalized = language.trim().toLowerCase();
+  if (normalized === 'zh' || normalized === 'zh-cn' || normalized === 'zh-hans') {
+    return 'zh-CN';
+  }
+  if (normalized === 'zh-tw' || normalized === 'zh-hant') {
+    return 'zh-TW';
+  }
   if (language in LANGUAGE_LABELS) {
     return language as TranscriptionLanguage;
   }
@@ -2387,7 +2405,7 @@ function renderDurableDraft(draft: DurableDraft | null): void {
   const sourceApp = draft.source_app?.trim() || 'Unknown app';
   draftRestorePreviewEl.textContent = `${formatHistoryTimestamp(
     draft.created_at_ms
-  )} | ${recordingModeLabel(draft.recording_mode)} | ${languageLabel(draft.language)} | ${sourceApp}\n${previewText}`;
+  )} | ${languageLabel(draft.language)} | ${sourceApp}\n${previewText}`;
 }
 
 function isSameCalendarDay(left: Date, right: Date): boolean {
@@ -2646,7 +2664,7 @@ draftRestoreCopyBtn.addEventListener('click', async () => {
   if (!durableDraft?.text?.trim()) return;
   draftRestoreCopyBtn.disabled = true;
   try {
-    await copyTextWithStatus(durableDraft.text, 'Recovered draft copied to clipboard.');
+    await copyTextWithStatus(durableDraft.text, 'Saved text copied.');
   } catch (error) {
     setStatusMessage(`Copy failed: ${userErrorMessage(error)}`);
   } finally {
@@ -2658,9 +2676,9 @@ draftRestoreDismissBtn.addEventListener('click', async () => {
   draftRestoreDismissBtn.disabled = true;
   try {
     await invokeCommand('clear_durable_draft');
-    setStatusMessage('Saved draft discarded.');
+    setStatusMessage('Saved text dismissed.');
   } catch (error) {
-    setStatusMessage(`Draft was not discarded: ${userErrorMessage(error)}`);
+    setStatusMessage(`Saved text was not dismissed: ${userErrorMessage(error)}`);
   } finally {
     draftRestoreDismissBtn.disabled = false;
   }

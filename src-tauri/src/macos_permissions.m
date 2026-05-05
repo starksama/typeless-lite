@@ -42,6 +42,39 @@ bool verba_request_microphone_access(void) {
   return true;
 }
 
+static void verba_make_overlay_view_transparent(NSView *view) {
+  if (!view) {
+    return;
+  }
+
+  view.wantsLayer = YES;
+  view.layer.backgroundColor = NSColor.clearColor.CGColor;
+
+  @try {
+    [view setValue:@NO forKey:@"drawsBackground"];
+  } @catch (__unused NSException *exception) {
+  }
+
+  @try {
+    [view setValue:@NO forKey:@"opaque"];
+  } @catch (__unused NSException *exception) {
+  }
+
+  @try {
+    id scrollView = [view valueForKey:@"scrollView"];
+    if ([scrollView isKindOfClass:NSScrollView.class]) {
+      NSScrollView *webScrollView = (NSScrollView *)scrollView;
+      webScrollView.drawsBackground = NO;
+      webScrollView.backgroundColor = NSColor.clearColor;
+    }
+  } @catch (__unused NSException *exception) {
+  }
+
+  for (NSView *subview in view.subviews) {
+    verba_make_overlay_view_transparent(subview);
+  }
+}
+
 static void verba_prepare_overlay_window(NSWindow *window) {
   if (!window) {
     return;
@@ -54,6 +87,7 @@ static void verba_prepare_overlay_window(NSWindow *window) {
   window.hidesOnDeactivate = NO;
   window.contentView.wantsLayer = YES;
   window.contentView.layer.backgroundColor = NSColor.clearColor.CGColor;
+  verba_make_overlay_view_transparent(window.contentView);
   window.level = NSStatusWindowLevel;
   window.collectionBehavior =
     NSWindowCollectionBehaviorCanJoinAllSpaces |

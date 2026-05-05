@@ -1266,6 +1266,15 @@ struct TranscriptHistoryRecord<'a> {
     processing_latency_ms: Option<u64>,
 }
 
+struct ProcessedTranscript {
+    status_message: String,
+    final_output: String,
+    source_app: Option<String>,
+    recording_mode: String,
+    language: String,
+    inserted: bool,
+}
+
 fn push_transcript_history_entry(
     app: &AppHandle,
     state: &State<'_, AppState>,
@@ -1329,20 +1338,26 @@ fn normalize_recording_mode(mode: &str) -> String {
 }
 
 fn normalize_transcription_language(language: &str) -> String {
-    let normalized = language.trim();
-    const ALLOWED_LANGUAGES: [&str; 9] =
-        ["auto", "en", "zh", "zh-TW", "ja", "ko", "es", "fr", "de"];
-    if ALLOWED_LANGUAGES
-        .iter()
-        .any(|allowed| allowed.eq_ignore_ascii_case(normalized))
-    {
-        if normalized.eq_ignore_ascii_case("zh-tw") {
-            "zh-TW".to_string()
-        } else {
-            normalized.to_ascii_lowercase()
-        }
-    } else {
-        "auto".to_string()
+    match language.trim().to_ascii_lowercase().as_str() {
+        "auto" => "auto".to_string(),
+        "en" => "en".to_string(),
+        "zh" | "zh-cn" | "zh-hans" => "zh-CN".to_string(),
+        "zh-tw" | "zh-hant" => "zh-TW".to_string(),
+        "ja" => "ja".to_string(),
+        "ko" => "ko".to_string(),
+        "es" => "es".to_string(),
+        "fr" => "fr".to_string(),
+        "de" => "de".to_string(),
+        _ => "auto".to_string(),
+    }
+}
+
+fn transcription_api_language(language: &str) -> Option<String> {
+    let normalized = normalize_transcription_language(language);
+    match normalized.as_str() {
+        "auto" => None,
+        "zh-CN" | "zh-TW" => Some("zh".to_string()),
+        value => Some(value.to_string()),
     }
 }
 
@@ -1883,7 +1898,9 @@ mod shortcut_policy_tests {
 
 #[cfg(test)]
 mod transcription_prompt_tests {
-    use super::build_transcription_prompt;
+    use super::{
+        build_transcription_prompt, normalize_transcription_language, transcription_api_language,
+    };
 
     #[test]
     fn prompt_always_primes_mixed_language_transcription() {
@@ -1896,9 +1913,21 @@ mod transcription_prompt_tests {
     #[test]
     fn prompt_includes_language_and_term_hints_without_losing_primer() {
         let prompt = build_transcription_prompt("zh-TW", "OpenAI Whisper, TypeScript, pnpm");
-        assert!(prompt.contains("Primary language hint: zh-TW"));
+        assert!(prompt.contains("Primary language hint: Chinese (zh)"));
+        assert!(prompt.contains("Traditional Chinese characters"));
         assert!(prompt.contains("Terminology that may appear in the audio"));
         assert!(prompt.contains("Preserve each term in the language actually spoken"));
+    }
+
+    #[test]
+    fn chinese_variants_use_zh_api_language_with_script_prompt() {
+        assert_eq!(normalize_transcription_language("zh"), "zh-CN");
+        assert_eq!(normalize_transcription_language("zh-CN"), "zh-CN");
+        assert_eq!(normalize_transcription_language("zh-Hant"), "zh-TW");
+        assert_eq!(transcription_api_language("zh-CN").as_deref(), Some("zh"));
+        assert_eq!(transcription_api_language("zh-TW").as_deref(), Some("zh"));
+        assert!(build_transcription_prompt("zh-CN", "").contains("Simplified Chinese characters"));
+        assert!(build_transcription_prompt("zh-TW", "").contains("Traditional Chinese characters"));
     }
 
     #[test]
@@ -2446,7 +2475,7 @@ fn toggle_recording_with_mode(
                     .lock()
                     .ok()
                     .and_then(|draft| draft.clone())
-                    .map(|_| " Draft saved. In Dictation tab, click ‘Copy draft’ to restore.")
+                    .map(|_| " Saved text is available in Dictation.")
                     .unwrap_or("");
                 set_status(
                     &app_handle,
@@ -2823,6 +2852,7 @@ async fn process_audio_pipeline(
         );
         let transcription =
             transcribe_audio(&state.http_client, &settings, &processing_wav_path).await?;
+        let normalized_language = normalize_transcription_language(&settings.language);
         set_durable_draft(
             app,
             state,
@@ -2830,7 +2860,7 @@ async fn process_audio_pipeline(
                 text: transcription.clone(),
                 created_at_ms: now_epoch_ms(),
                 recording_mode: normalize_recording_mode(&recording_mode),
-                language: normalize_transcription_language(&settings.language),
+                language: normalized_language.clone(),
                 source_app: active_app_name.clone(),
             }),
         );
@@ -2850,26 +2880,36 @@ async fn process_audio_pipeline(
                 ),
             )
         } else if settings.format_enabled {
-            let formatter_result = format_transcript(
+            match format_transcript(
                 &state.http_client,
                 &settings,
                 &transcription,
                 active_app_name.as_deref(),
                 clipboard_reference.as_deref(),
             )
-            .await?;
-            if formatter_result.used_raw_fallback {
-                (
-                    formatter_result.text,
+            .await
+            {
+                Ok(formatter_result) => {
+                    if formatter_result.used_raw_fallback {
+                        (
+                            formatter_result.text,
+                            format!(
+                                "Inserted raw transcript into {insertion_destination} (formatter output failed safety check)."
+                            ),
+                        )
+                    } else {
+                        (
+                            formatter_result.text,
+                            format!("Inserted text into {insertion_destination}."),
+                        )
+                    }
+                }
+                Err(error) => (
+                    transcription,
                     format!(
-                        "Inserted raw transcript into {insertion_destination} (formatter output failed safety check)."
+                        "Inserted raw transcript into {insertion_destination} (formatter failed: {error})."
                     ),
-                )
-            } else {
-                (
-                    formatter_result.text,
-                    format!("Inserted text into {insertion_destination}."),
-                )
+                ),
             }
         } else {
             (
@@ -2877,15 +2917,36 @@ async fn process_audio_pipeline(
                 format!("Inserted raw transcript into {insertion_destination}."),
             )
         };
-        paste_text(app, &output_text, insertion_target_app.as_deref())?;
+        set_durable_draft(
+            app,
+            state,
+            Some(DurableDraft {
+                text: output_text.clone(),
+                created_at_ms: now_epoch_ms(),
+                recording_mode: normalize_recording_mode(&recording_mode),
+                language: normalized_language.clone(),
+                source_app: active_app_name.clone(),
+            }),
+        );
 
-        Ok::<(String, String, Option<String>, String, String), AppError>((
-            inserted_message,
-            output_text,
-            active_app_name,
+        let (inserted, status_message) = match paste_text(app, &output_text, insertion_target_app.as_deref()) {
+            Ok(()) => (true, inserted_message),
+            Err(error) => (
+                false,
+                format!(
+                    "Text captured, but insertion into {insertion_destination} failed: {error}. Copy it from History or Saved text."
+                ),
+            ),
+        };
+
+        Ok::<ProcessedTranscript, AppError>(ProcessedTranscript {
+            status_message,
+            final_output: output_text,
+            source_app: active_app_name,
             recording_mode,
-            settings.language.clone(),
-        ))
+            language: normalized_language,
+            inserted,
+        })
     };
     let result = pipeline_result.await;
     if let Err(cleanup_error) = fs::remove_file(&wav_path) {
@@ -2915,21 +2976,23 @@ async fn process_audio_pipeline(
 
     remove_cached_recording(&cached_recording);
 
+    let processed = result?;
     let latency_ms = processing_started_at.elapsed().as_millis() as u64;
-    let (inserted_message, output_text, source_app, recording_mode, language) = result?;
-    set_durable_draft(app, state, None);
     push_transcript_history_entry(
         app,
         state,
         TranscriptHistoryRecord {
-            final_output: &output_text,
+            final_output: &processed.final_output,
             source: "dictation",
-            recording_mode: &recording_mode,
-            language: &language,
-            source_app: source_app.as_deref(),
+            recording_mode: &processed.recording_mode,
+            language: &processed.language,
+            source_app: processed.source_app.as_deref(),
             processing_latency_ms: Some(latency_ms),
         },
     );
+    if processed.inserted {
+        set_durable_draft(app, state, None);
+    }
 
     set_status(
         app,
@@ -2937,9 +3000,11 @@ async fn process_audio_pipeline(
         Some(false),
         Some(false),
         Some(0),
-        format!("{inserted_message} {latency_ms}ms"),
+        format!("{} {latency_ms}ms", processed.status_message),
     );
-    play_earcon_if_enabled(state, Earcon::Success);
+    if processed.inserted {
+        play_earcon_if_enabled(state, Earcon::Success);
+    }
 
     Ok(())
 }
@@ -2952,6 +3017,7 @@ async fn transcribe_audio(
     let bytes = fs::read(wav_path)?;
     let url = format!("{}/audio/transcriptions", settings.api_base_url);
     let transcription_language = normalize_transcription_language(&settings.language);
+    let api_language = transcription_api_language(&transcription_language);
     let transcription_prompt =
         build_transcription_prompt(&transcription_language, settings.custom_vocabulary.as_str());
 
@@ -2965,8 +3031,8 @@ async fn transcribe_audio(
                     .map_err(|e| AppError::Message(format!("MIME error: {e}")))?,
             )
             .text("model", settings.whisper_model.clone());
-        if transcription_language != "auto" {
-            form = form.text("language", transcription_language.clone());
+        if let Some(api_language) = api_language.as_ref() {
+            form = form.text("language", api_language.clone());
         }
         form = form.text("prompt", transcription_prompt.clone());
 
@@ -3019,6 +3085,7 @@ async fn transcribe_audio(
 }
 
 fn build_transcription_prompt(transcription_language: &str, custom_vocabulary: &str) -> String {
+    let normalized_language = normalize_transcription_language(transcription_language);
     let custom = truncate_chars(
         custom_vocabulary.trim(),
         TRANSCRIPTION_PROMPT_CONTEXT_MAX_CHARS,
@@ -3029,10 +3096,25 @@ fn build_transcription_prompt(transcription_language: &str, custom_vocabulary: &
             .to_string(),
     ];
 
-    if transcription_language != "auto" {
-        parts.push(format!(
-            "Primary language hint: {transcription_language}. Treat this only as a hint and still preserve mixed-language segments exactly as spoken."
-        ));
+    match normalized_language.as_str() {
+        "auto" => {}
+        "zh-CN" => {
+            parts.push(
+                "Primary language hint: Chinese (zh). Write Chinese text in Simplified Chinese characters. Treat this only as a hint and still preserve mixed-language segments exactly as spoken."
+                    .to_string(),
+            );
+        }
+        "zh-TW" => {
+            parts.push(
+                "Primary language hint: Chinese (zh). Write Chinese text in Traditional Chinese characters. Treat this only as a hint and still preserve mixed-language segments exactly as spoken."
+                    .to_string(),
+            );
+        }
+        value => {
+            parts.push(format!(
+                "Primary language hint: {value}. Treat this only as a hint and still preserve mixed-language segments exactly as spoken."
+            ));
+        }
     }
     if !custom.is_empty() {
         parts.push(format!(
