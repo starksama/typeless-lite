@@ -2,6 +2,7 @@
 
 use std::{
     collections::HashSet,
+    ffi::c_void,
     fs,
     io::BufWriter,
     path::{Path, PathBuf},
@@ -43,9 +44,9 @@ const PRE_PASTE_DELAY_MS: u64 = 120;
 const TARGET_APP_REFOCUS_DELAY_MS: u64 = 120;
 const PASTE_RETRY_BACKOFF_MS: u64 = 45;
 const CLIPBOARD_RESTORE_DELAY_MS: u64 = 2_000;
-const OVERLAY_WINDOW_WIDTH: f64 = 320.0;
-const OVERLAY_WINDOW_HEIGHT: f64 = 96.0;
-const OVERLAY_WINDOW_BOTTOM_MARGIN: f64 = 32.0;
+const OVERLAY_WINDOW_WIDTH: f64 = 214.0;
+const OVERLAY_WINDOW_HEIGHT: f64 = 44.0;
+const OVERLAY_WINDOW_BOTTOM_MARGIN: f64 = 28.0;
 const FORMAT_CONTEXT_CLIPBOARD_MAX_CHARS: usize = 500;
 const TRANSCRIPTION_PROMPT_CONTEXT_MAX_CHARS: usize = 500;
 const TERMINAL_TYPE_CHUNK_SIZE: usize = 80;
@@ -68,6 +69,13 @@ const MIN_CAPTURE_PEAK: f32 = 0.01;
 #[cfg(target_os = "macos")]
 const MAC_V_KEYCODE: u16 = 0x09;
 static HISTORY_ID_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(target_os = "macos")]
+extern "C" {
+    fn verba_configure_overlay_window(ns_window: *mut c_void);
+    fn verba_show_overlay_window_without_activation(ns_window: *mut c_void);
+    fn verba_hide_overlay_window(ns_window: *mut c_void);
+}
 static APP_CONFIG: OnceLock<AppConfig> = OnceLock::new();
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -111,7 +119,7 @@ fn default_format_enabled() -> bool {
 }
 
 fn default_play_sound_cues() -> bool {
-    true
+    false
 }
 
 fn default_skip_formatter_in_terminals() -> bool {
@@ -186,7 +194,7 @@ impl Default for Settings {
             format_enabled: false,
             skip_formatter_in_terminals: true,
             include_clipboard_context: true,
-            play_sound_cues: true,
+            play_sound_cues: false,
             api_base_url: "https://api.openai.com/v1".to_string(),
             recording_mode: default_recording_mode(),
             language: default_transcription_language(),
@@ -1436,6 +1444,52 @@ fn update_tray_status(app: &AppHandle, status: &RuntimeStatus) {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn configure_overlay_window(window: &tauri::WebviewWindow) {
+    if let Ok(ns_window) = window.ns_window() {
+        unsafe {
+            verba_configure_overlay_window(ns_window);
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn configure_overlay_window(_window: &tauri::WebviewWindow) {}
+
+#[cfg(target_os = "macos")]
+fn show_overlay_window(window: &tauri::WebviewWindow) -> Result<(), String> {
+    let ns_window = window
+        .ns_window()
+        .map_err(|e| format!("Failed to access overlay window handle: {e}"))?;
+    unsafe {
+        verba_show_overlay_window_without_activation(ns_window);
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn show_overlay_window(window: &tauri::WebviewWindow) -> Result<(), String> {
+    window
+        .show()
+        .map_err(|e| format!("Failed to show overlay window: {e}"))
+}
+
+#[cfg(target_os = "macos")]
+fn hide_overlay_window(window: &tauri::WebviewWindow) {
+    if let Ok(ns_window) = window.ns_window() {
+        unsafe {
+            verba_hide_overlay_window(ns_window);
+        }
+    } else {
+        let _ = window.hide();
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn hide_overlay_window(window: &tauri::WebviewWindow) {
+    let _ = window.hide();
+}
+
 fn ensure_overlay_window(app: &AppHandle) -> Result<(), String> {
     if app.get_webview_window(OVERLAY_WINDOW_LABEL).is_some() {
         return Ok(());
@@ -1474,6 +1528,7 @@ fn ensure_overlay_window(app: &AppHandle) -> Result<(), String> {
     .build()
     .map_err(|e| format!("Failed to create overlay window: {e}"))?;
 
+    configure_overlay_window(&window);
     let _ = window.set_ignore_cursor_events(true);
     let _ = window.set_always_on_top(true);
     let _ = window.set_visible_on_all_workspaces(true);
@@ -1490,7 +1545,7 @@ fn destroy_overlay_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(OVERLAY_WINDOW_LABEL) {
         let _ = window.set_always_on_top(false);
         let _ = window.set_visible_on_all_workspaces(false);
-        let _ = window.hide();
+        hide_overlay_window(&window);
         let _ = window.destroy();
         eprintln!("[{}] overlay_window_destroyed", app_log_prefix());
     }
@@ -1505,7 +1560,10 @@ fn sync_overlay_window_visibility(app: &AppHandle, status: &RuntimeStatus) {
         if let Some(window) = app.get_webview_window(OVERLAY_WINDOW_LABEL) {
             let _ = window.set_always_on_top(true);
             let _ = window.set_visible_on_all_workspaces(true);
-            let _ = window.show();
+            configure_overlay_window(&window);
+            if let Err(error) = show_overlay_window(&window) {
+                eprintln!("[{}] overlay_window_show_failed error={error}", app_log_prefix());
+            }
         }
         return;
     }
@@ -1917,6 +1975,38 @@ mod settings_compat_tests {
 
         assert_eq!(settings.hold_hotkeys, vec!["Alt+R"]);
         assert_eq!(settings.toggle_hotkeys, vec!["Ctrl+Shift+1"]);
+        assert!(settings.play_sound_cues);
+    }
+
+    #[test]
+    fn defaults_sound_cues_off_for_new_settings() {
+        let settings = Settings::default();
+
+        assert!(!settings.play_sound_cues);
+    }
+
+    #[test]
+    fn defaults_missing_sound_cues_off_for_legacy_settings() {
+        let settings: Settings = serde_json::from_str(
+            r#"{
+              "api_key": "",
+              "prompt_template": "x",
+              "hold_hotkey": "Alt+R",
+              "toggle_hotkey": "Ctrl+Shift+1",
+              "whisper_model": "whisper-1",
+              "custom_vocabulary": "",
+              "format_model": "gpt-4o-mini",
+              "format_enabled": false,
+              "skip_formatter_in_terminals": true,
+              "include_clipboard_context": true,
+              "api_base_url": "https://api.openai.com/v1",
+              "recording_mode": "toggle",
+              "language": "auto"
+            }"#,
+        )
+        .expect("settings should parse");
+
+        assert!(!settings.play_sound_cues);
     }
 }
 

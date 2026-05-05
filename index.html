@@ -30,6 +30,7 @@
       <aside id="workspace-sidebar" class="sidebar" aria-label="Workspace navigation">
         <div class="sidebar-surface">
           <div class="brand-lockup">
+            <img id="sidebar-brand-icon" class="sidebar-brand-icon" alt="" aria-hidden="true" />
             <div class="brand-copy">
               <p id="sidebar-brand-name" class="sidebar-title">Verba</p>
             </div>
@@ -170,7 +171,6 @@
             <div id="status-banner" class="status-banner" data-status-tone="ready" role="status" aria-live="polite">
               <span class="status-indicator" aria-hidden="true"></span>
               <div class="status-banner-copy">
-                <span id="status-label" class="status-label">Ready</span>
                 <p id="status" class="status-text">Ready</p>
               </div>
             </div>
@@ -187,13 +187,11 @@
           <section class="page-surface home-overview">
             <div class="home-topbar">
               <div class="home-heading">
-                <p class="eyebrow">Overview</p>
                 <h2>Capture text</h2>
               </div>
 
               <div class="buttons home-actions">
                 <button id="home-toggle-btn" type="button" class="ui-button">Start recording</button>
-                <button id="home-fast-mode-btn" type="button" class="ui-button ui-button-secondary">Enable polishing</button>
               </div>
             </div>
 
@@ -355,10 +353,6 @@
                   </div>
                 </div>
 
-                <div class="settings-top-status" aria-label="Settings status">
-                  <p><span>Runtime</span> <strong id="settings-runtime-status">Checking</strong></p>
-                </div>
-
                 <section
                   id="settings-panel-general"
                   class="settings-panel is-active"
@@ -366,10 +360,6 @@
                   role="tabpanel"
                   aria-labelledby="settings-tab-general"
                 >
-                  <div class="settings-panel-head">
-                    <h3>General</h3>
-                  </div>
-
                   <div class="settings-panel-grid">
                     <label class="ui-field">
                       <span class="ui-label">Appearance</span>
@@ -406,7 +396,7 @@
 
                   <div class="toggle-grid">
                     <label class="toggle-card checkbox-label">
-                      <input id="playSoundCues" type="checkbox" checked />
+                      <input id="playSoundCues" type="checkbox" />
                       <span>
                         <strong>Sound cues</strong>
                       </span>
@@ -423,7 +413,6 @@
                   hidden
                 >
                   <div class="settings-panel-head">
-                    <h3>Shortcuts</h3>
                     <span id="shortcut-dirty-indicator" class="shortcut-dirty-indicator hidden">Unsaved</span>
                   </div>
 
@@ -471,10 +460,6 @@
                   aria-labelledby="settings-tab-ai"
                   hidden
                 >
-                  <div class="settings-panel-head">
-                    <h3>AI</h3>
-                  </div>
-
                   <div class="settings-panel-grid settings-panel-grid-primary">
                     <label class="ui-field">
                       <span class="ui-label">OpenAI API key</span>
@@ -550,12 +535,8 @@
                   aria-labelledby="settings-tab-access"
                   hidden
                 >
-                  <div class="settings-panel-head">
-                    <h3>Access</h3>
-                  </div>
-
-                  <div class="diagnostics-grid">
-                    <section class="support-card support-card-strong" id="settings-accessibility-card" data-permission-state="checking">
+                  <div class="access-list">
+                    <section class="support-card support-card-strong access-row" id="settings-accessibility-card" data-permission-state="checking">
                       <div class="support-card-head">
                         <h3>Accessibility</h3>
                         <strong id="accessibility-status" class="support-card-status">Unknown</strong>
@@ -574,7 +555,7 @@
                       </div>
                     </section>
 
-                    <section class="support-card support-card-strong" id="settings-microphone-card" data-permission-state="checking">
+                    <section class="support-card support-card-strong access-row" id="settings-microphone-card" data-permission-state="checking">
                       <div class="support-card-head">
                         <h3>Microphone</h3>
                         <strong id="microphone-status" class="support-card-status">Unknown</strong>
@@ -591,7 +572,7 @@
                       <span id="settings-microphone-status" class="hidden">Unknown</span>
                     </section>
 
-                    <section class="support-card support-card-strong">
+                    <section class="support-card support-card-strong access-row">
                       <div class="support-card-head">
                         <h3>API</h3>
                         <strong id="settings-diagnostics-copy-status" class="support-card-status hidden"></strong>

@@ -211,7 +211,6 @@ const settingsAccessibilityCardEl = document.querySelector<HTMLElement>('#settin
 const settingsMicrophoneCardEl = document.querySelector<HTMLElement>('#settings-microphone-card')!;
 const settingsAccessibilityGuidanceEl = document.querySelector<HTMLParagraphElement>('#settings-accessibility-guidance')!;
 const settingsMicrophoneGuidanceEl = document.querySelector<HTMLParagraphElement>('#settings-microphone-guidance')!;
-const settingsRuntimeStatusEl = document.querySelector<HTMLElement>('#settings-runtime-status')!;
 const settingsAccessibilityStatusEl = document.querySelector<HTMLElement>('#settings-accessibility-status')!;
 const settingsMicrophoneStatusEl = document.querySelector<HTMLElement>('#settings-microphone-status')!;
 const settingsApiTestStatusEl = document.querySelector<HTMLElement>('#settings-api-test-status')!;
@@ -253,7 +252,6 @@ const holdShortcutAddBtn = document.querySelector<HTMLButtonElement>('#hold-shor
 const toggleShortcutAddBtn = document.querySelector<HTMLButtonElement>('#toggle-shortcut-add-btn')!;
 const shortcutDirtyIndicatorEl = document.querySelector<HTMLSpanElement>('#shortcut-dirty-indicator')!;
 const homeToggleBtn = document.querySelector<HTMLButtonElement>('#home-toggle-btn')!;
-const homeFastModeBtn = document.querySelector<HTMLButtonElement>('#home-fast-mode-btn')!;
 const homeStatDaysEl = document.querySelector<HTMLSpanElement>('#home-stat-days')!;
 const homeStatWordsEl = document.querySelector<HTMLSpanElement>('#home-stat-words')!;
 const homeStatSavedEl = document.querySelector<HTMLSpanElement>('#home-stat-saved')!;
@@ -262,7 +260,7 @@ const homeRecentFeedEl = document.querySelector<HTMLDivElement>('#home-recent-fe
 const shortcutHoldHintEl = document.querySelector<HTMLSpanElement>('#shortcut-hold-hint')!;
 const shortcutToggleHintEl = document.querySelector<HTMLSpanElement>('#shortcut-toggle-hint')!;
 const statusBannerEl = document.querySelector<HTMLElement>('#status-banner')!;
-const statusLabelEl = document.querySelector<HTMLSpanElement>('#status-label')!;
+const sidebarBrandIconEl = document.querySelector<HTMLImageElement>('#sidebar-brand-icon')!;
 const sidebarBrandNameEl = document.querySelector<HTMLElement>('#sidebar-brand-name')!;
 const workspaceViewTitleEl = document.querySelector<HTMLElement>('#workspace-view-title')!;
 const appToastEl = document.querySelector<HTMLDivElement>('#app-toast')!;
@@ -451,27 +449,38 @@ function setPermissionUiState(
 
 function accessibilityGuidance(status: AccessibilityPermissionStatus | null): string {
   const appName = APP_BRAND.displayName;
-  if (!status) return 'Click Check again to read macOS access.';
-  if (!status.is_supported) return 'Accessibility setup is only available on macOS.';
-  if (status.status === 'dev_terminal') return status.guidance;
-  if (status.is_granted) return 'Ready to insert text into the focused app.';
-  return `Open Accessibility, turn ${appName} on, then click Check again.`;
+  if (!status) return 'Check again.';
+  if (!status.is_supported) return 'macOS only.';
+  if (status.status === 'dev_terminal' || status.is_granted) return '';
+  return `Turn ${appName} on in Accessibility.`;
 }
 
 function microphoneGuidance(status: MicrophonePermissionStatus | null): string {
   const appName = APP_BRAND.displayName;
-  if (!status) return 'Click Check again to read macOS access.';
-  if (!status.is_supported) return 'Microphone setup is only available on macOS.';
-  if (status.status === 'dev_terminal') return status.guidance;
-  if (status.is_granted) return 'Ready to record.';
+  if (!status) return 'Check again.';
+  if (!status.is_supported) return 'macOS only.';
+  if (status.status === 'dev_terminal' || status.is_granted) return '';
   if (status.status === 'not_determined') {
-    return `Click Request access. macOS shows a prompt; apps cannot be added manually in Microphone.`;
+    return 'Click Request access.';
   }
   if (status.status === 'denied') {
-    return `Open Microphone and turn ${appName} on. If it is missing, click Request access first.`;
+    return `Turn ${appName} on in Microphone.`;
   }
-  if (status.status === 'restricted') return 'Microphone is blocked by macOS policy.';
-  return 'Click Request access, then follow the macOS prompt.';
+  if (status.status === 'restricted') return 'Blocked by macOS policy.';
+  return 'Click Request access.';
+}
+
+function setGuidanceText(element: HTMLElement, message: string): void {
+  element.textContent = message;
+  element.hidden = message.trim().length === 0;
+}
+
+function permissionStatusLabel(status: AccessibilityPermissionStatus | MicrophonePermissionStatus): string {
+  if (!status.is_supported) return 'Unsupported';
+  if (status.status === 'dev_terminal') return 'Dev mode';
+  if (status.is_granted) return 'Enabled';
+  if (status.status === 'unavailable') return 'Unavailable';
+  return 'Needs access';
 }
 
 function setAccessibilityStatusSummary(message: string, clearStructured = false): void {
@@ -479,7 +488,7 @@ function setAccessibilityStatusSummary(message: string, clearStructured = false)
   settingsAccessibilityStatusEl.textContent = message;
   if (clearStructured) {
     lastAccessibilityStatus = null;
-    settingsAccessibilityGuidanceEl.textContent = accessibilityGuidance(null);
+    setGuidanceText(settingsAccessibilityGuidanceEl, accessibilityGuidance(null));
     setPermissionUiState(settingsAccessibilityCardEl, null);
     setPermissionUiState(onboardingAccessibilityRowEl, null);
   }
@@ -490,7 +499,7 @@ function setMicrophoneStatusSummary(message: string, clearStructured = false): v
   settingsMicrophoneStatusEl.textContent = message;
   if (clearStructured) {
     lastMicrophoneStatus = null;
-    settingsMicrophoneGuidanceEl.textContent = microphoneGuidance(null);
+    setGuidanceText(settingsMicrophoneGuidanceEl, microphoneGuidance(null));
     setPermissionUiState(settingsMicrophoneCardEl, null);
     setPermissionUiState(onboardingMicrophoneRowEl, null);
   }
@@ -513,13 +522,13 @@ function focusShortcutSettings(): void {
   setActiveSettingsSection('shortcuts');
 }
 
-function setStatusBannerTone(tone: StatusBannerTone, label: string): void {
+function setStatusBannerTone(tone: StatusBannerTone): void {
   statusBannerEl.dataset.statusTone = tone;
-  statusLabelEl.textContent = label;
 }
 
 function applyBranding(): void {
   document.title = APP_BRAND.displayName;
+  sidebarBrandIconEl.src = APP_BRAND.iconUrl;
   sidebarBrandNameEl.textContent = APP_BRAND.displayName;
   onboardingTitleEl.textContent = `Welcome to ${APP_BRAND.displayName}`;
   onboardingPermissionsCopyEl.textContent =
@@ -530,16 +539,16 @@ function renderWorkspaceHeader(tab: WorkspaceTab): void {
   workspaceViewTitleEl.textContent = WORKSPACE_TITLES[tab];
 }
 
-function inferStatusBannerPresentation(message: string): { tone: StatusBannerTone; label: string } {
+function inferStatusBannerTone(message: string): StatusBannerTone {
   const normalized = message.trim().toLowerCase();
   if (lastRuntimeStatus?.is_recording) {
-    return { tone: 'recording', label: 'Recording' };
+    return 'recording';
   }
   if (lastRuntimeStatus?.is_processing) {
-    return { tone: 'processing', label: 'Processing' };
+    return 'processing';
   }
   if (normalized.includes('setup needed')) {
-    return { tone: 'issue', label: 'Setup' };
+    return 'issue';
   }
   if (
     normalized.includes('failed') ||
@@ -549,7 +558,7 @@ function inferStatusBannerPresentation(message: string): { tone: StatusBannerTon
     normalized.includes('missing') ||
     normalized.includes('too short')
   ) {
-    return { tone: 'issue', label: 'Issue' };
+    return 'issue';
   }
   if (
     normalized.includes('starting') ||
@@ -560,26 +569,26 @@ function inferStatusBannerPresentation(message: string): { tone: StatusBannerTon
     normalized.includes('transcribing') ||
     normalized.includes('formatting')
   ) {
-    return { tone: 'processing', label: 'Working' };
+    return 'processing';
   }
   if (normalized.includes('recording')) {
-    return { tone: 'recording', label: 'Recording' };
+    return 'recording';
   }
-  return { tone: 'ready', label: 'Ready' };
+  return 'ready';
 }
 
 function syncStatusBannerFromText(): void {
   renderStatusBanner();
 }
 
-function runtimeStatusBannerPresentation(status: RuntimeStatus): { tone: StatusBannerTone; label: string } {
+function runtimeStatusBannerTone(status: RuntimeStatus): StatusBannerTone {
   if (status.is_recording) {
-    return { tone: 'recording', label: 'Recording' };
+    return 'recording';
   }
   if (status.is_processing) {
-    return { tone: 'processing', label: 'Processing' };
+    return 'processing';
   }
-  return inferStatusBannerPresentation(status.last_message);
+  return inferStatusBannerTone(status.last_message);
 }
 
 function shouldShowIdleStatusMessage(message: string): boolean {
@@ -605,25 +614,23 @@ function renderStatusBanner(): void {
   const runtimeIsActive = Boolean(runtime?.is_recording || runtime?.is_processing);
 
   if (runtimeIsActive && runtime) {
-    const presentation = runtimeStatusBannerPresentation(runtime);
     statusEl.textContent = runtime.last_message;
-    setStatusBannerTone(presentation.tone, presentation.label);
+    setStatusBannerTone(runtimeStatusBannerTone(runtime));
     setStatusBannerActionable(false);
     return;
   }
 
   if (missing.length > 0) {
     statusEl.textContent = `Setup needed: ${missing.join(' and ')}`;
-    setStatusBannerTone('issue', 'Setup');
+    setStatusBannerTone('issue');
     setStatusBannerActionable(true);
     return;
   }
 
   const message =
     statusMessageSource === 'ui' && shouldShowIdleStatusMessage(appStatusMessage) ? appStatusMessage.trim() : 'Ready';
-  const presentation = inferStatusBannerPresentation(message);
   statusEl.textContent = message;
-  setStatusBannerTone(presentation.tone, presentation.label);
+  setStatusBannerTone(inferStatusBannerTone(message));
   setStatusBannerActionable(false);
 }
 
@@ -1604,7 +1611,6 @@ function renderStatus(status: RuntimeStatus): void {
   document.body.classList.toggle('is-processing', status.is_processing);
   clearTogglePendingState(status.is_recording);
   setRecordingActionLabels(status.is_recording);
-  settingsRuntimeStatusEl.textContent = runtimeStateLabel(status);
   const runtimeBecameActive =
     status.is_recording ||
     status.is_processing ||
@@ -1661,26 +1667,16 @@ async function requestToggleRecording(): Promise<void> {
   }
 }
 
-function renderFastModeState(formatEnabled: boolean): void {
-  const polishingEnabled = formatEnabled;
-  homeFastModeBtn.textContent = polishingEnabled ? 'Disable polishing' : 'Enable polishing';
-}
-
 function renderAccessibilityStatus(status: AccessibilityPermissionStatus): void {
   lastAccessibilityStatus = status;
-  const label = status.is_supported
-    ? status.status === 'dev_terminal'
-      ? 'Dev mode'
-      : status.is_granted
-      ? 'Enabled'
-      : 'Needs access'
-    : 'Unsupported';
+  const label = permissionStatusLabel(status);
   setAccessibilityStatusSummary(label);
-  settingsAccessibilityGuidanceEl.textContent = accessibilityGuidance(status);
+  setGuidanceText(settingsAccessibilityGuidanceEl, accessibilityGuidance(status));
   setPermissionUiState(settingsAccessibilityCardEl, status);
-  openAccessibilitySettingsBtn.textContent = status.is_granted ? 'Allowed' : 'Open Accessibility';
+  openAccessibilitySettingsBtn.textContent = 'Open Accessibility';
+  openAccessibilitySettingsBtn.hidden = status.is_granted || !status.is_supported;
   openAccessibilitySettingsBtn.disabled = status.is_granted || !status.is_supported;
-  checkAccessibilityBtn.hidden = status.is_granted;
+  checkAccessibilityBtn.hidden = status.is_granted || !status.is_supported;
   resetAccessibilityPermissionBtn.hidden = !status.is_supported || status.is_granted;
   renderOnboardingPermissionStatuses();
   syncPermissionSetupBanner();
@@ -1688,23 +1684,16 @@ function renderAccessibilityStatus(status: AccessibilityPermissionStatus): void 
 
 function renderMicrophoneStatus(status: MicrophonePermissionStatus): void {
   lastMicrophoneStatus = status;
-  const label = status.is_supported
-    ? status.status === 'dev_terminal'
-      ? 'Dev mode'
-      : status.is_granted
-      ? 'Enabled'
-      : status.status === 'unavailable'
-        ? 'Unavailable'
-        : 'Needs access'
-    : 'Unsupported';
+  const label = permissionStatusLabel(status);
   setMicrophoneStatusSummary(label);
-  settingsMicrophoneGuidanceEl.textContent = microphoneGuidance(status);
+  setGuidanceText(settingsMicrophoneGuidanceEl, microphoneGuidance(status));
   setPermissionUiState(settingsMicrophoneCardEl, status);
   const microphoneActionLabel =
     status.status === 'denied' || status.status === 'restricted' ? 'Open Microphone' : 'Request access';
-  openMicrophoneSettingsBtn.textContent = status.is_granted ? 'Allowed' : microphoneActionLabel;
+  openMicrophoneSettingsBtn.textContent = microphoneActionLabel;
+  openMicrophoneSettingsBtn.hidden = status.is_granted || !status.is_supported;
   openMicrophoneSettingsBtn.disabled = status.is_granted || !status.is_supported;
-  checkMicrophoneBtn.hidden = status.is_granted;
+  checkMicrophoneBtn.hidden = status.is_granted || !status.is_supported;
   renderOnboardingPermissionStatuses();
   syncPermissionSetupBanner();
 }
@@ -2179,7 +2168,6 @@ async function saveSettingsPayload(payload: Settings, successMessage = 'Saved se
       toggle_hotkeys: savedSettings.toggle_hotkeys
     });
     formatEnabledInput.checked = savedSettings.format_enabled;
-    renderFastModeState(savedSettings.format_enabled);
     renderStatus(runtimeStatus);
     setStatusMessage(successMessage);
     renderShortcutDirtyState();
@@ -2417,12 +2405,8 @@ function createTranscriptRow(
           </svg>
         `;
 
-    const labelEl = document.createElement('span');
-    labelEl.className = 'history-row-indicator-label';
-    labelEl.textContent = options.isCopied ? 'Copied' : '';
-
     indicatorEl.classList.add(options.isCopied ? 'is-copied' : 'is-idle');
-    indicatorEl.append(iconEl, labelEl);
+    indicatorEl.append(iconEl);
     actionsEl.append(indicatorEl);
     rowEl.append(mainEl, actionsEl);
     return rowEl;
@@ -2630,7 +2614,6 @@ async function loadInitial(): Promise<void> {
     recording_mode: normalizeMode(settings.recording_mode),
     language: normalizeLanguage(settings.language)
   });
-  renderFastModeState(settings.format_enabled);
   validateSettingsHotkeyInput('hold');
   validateSettingsHotkeyInput('toggle');
 
@@ -2709,24 +2692,6 @@ toggleBtn.addEventListener('click', () => {
 
 homeToggleBtn.addEventListener('click', () => {
   void requestToggleRecording();
-});
-
-homeFastModeBtn.addEventListener('click', async () => {
-  homeFastModeBtn.disabled = true;
-  const currentSettings = readSettingsFromForm();
-  const nextFormatEnabled = !currentSettings.format_enabled;
-  const payload: Settings = {
-    ...currentSettings,
-    format_enabled: nextFormatEnabled
-  };
-  const successMessage = nextFormatEnabled
-    ? 'Polishing enabled.'
-    : 'Polishing disabled. Verba will insert raw transcription.';
-  const saved = await saveSettingsPayload(payload, successMessage);
-  if (!saved) {
-    renderFastModeState(formatEnabledInput.checked);
-  }
-  homeFastModeBtn.disabled = false;
 });
 
 draftRestoreCopyBtn.addEventListener('click', async () => {

@@ -1,3 +1,4 @@
+#import <AppKit/AppKit.h>
 #import <AVFoundation/AVFoundation.h>
 #import <ApplicationServices/ApplicationServices.h>
 #import <dispatch/dispatch.h>
@@ -39,4 +40,36 @@ bool verba_request_microphone_access(void) {
   }
 
   return true;
+}
+
+static void verba_prepare_overlay_window(NSWindow *window) {
+  if (!window) {
+    return;
+  }
+
+  window.opaque = NO;
+  window.backgroundColor = NSColor.clearColor;
+  window.hasShadow = NO;
+  window.ignoresMouseEvents = YES;
+  window.hidesOnDeactivate = NO;
+  window.level = NSStatusWindowLevel;
+  window.collectionBehavior =
+    NSWindowCollectionBehaviorCanJoinAllSpaces |
+    NSWindowCollectionBehaviorStationary |
+    NSWindowCollectionBehaviorIgnoresCycle;
+}
+
+void verba_configure_overlay_window(void *window_ptr) {
+  verba_prepare_overlay_window((__bridge NSWindow *)window_ptr);
+}
+
+void verba_show_overlay_window_without_activation(void *window_ptr) {
+  NSWindow *window = (__bridge NSWindow *)window_ptr;
+  verba_prepare_overlay_window(window);
+  [window orderFrontRegardless];
+}
+
+void verba_hide_overlay_window(void *window_ptr) {
+  NSWindow *window = (__bridge NSWindow *)window_ptr;
+  [window orderOut:nil];
 }

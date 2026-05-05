@@ -6,6 +6,7 @@ fn main() {
             .flag("-fobjc-arc")
             .compile("macos_permissions");
         println!("cargo:rustc-link-lib=framework=ApplicationServices");
+        println!("cargo:rustc-link-lib=framework=AppKit");
         println!("cargo:rustc-link-lib=framework=AVFoundation");
         println!("cargo:rustc-link-lib=framework=Foundation");
     }
