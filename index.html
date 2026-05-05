@@ -33,7 +33,7 @@
         <div class="sidebar-surface">
           <div class="brand-lockup">
             <div class="brand-copy">
-              <p id="sidebar-brand-name" class="sidebar-title">Desktop Dictation</p>
+              <p id="sidebar-brand-name" class="sidebar-title">Keylesss</p>
             </div>
           </div>
 
@@ -174,7 +174,7 @@
           aria-labelledby="tab-home"
           data-tab-panel="home"
         >
-          <section class="page-surface home-overview">
+          <section class="page-surface home-overview" data-surface-label="Capture loop">
             <div class="home-topbar">
               <div class="home-heading">
                 <p class="eyebrow">Overview</p>
@@ -208,7 +208,7 @@
 
             <section class="home-recent">
               <p class="summary-label">Recent</p>
-              <p id="home-recent-empty" class="hint">No recent transcript yet.</p>
+              <p id="home-recent-empty" class="hint">Record once; your latest transcripts appear here.</p>
               <div id="home-recent-feed" class="home-recent-feed" aria-live="polite"></div>
             </section>
           </section>
@@ -222,7 +222,7 @@
           data-tab-panel="dictation"
           hidden
         >
-          <section id="recording-card" class="page-surface dictation-stage">
+          <section id="recording-card" class="page-surface dictation-stage" data-surface-label="Live input">
             <div class="card-head">
               <p class="eyebrow">Live capture</p>
               <h2>Dictation</h2>
@@ -264,12 +264,12 @@
           data-tab-panel="history"
           hidden
         >
-          <section class="page-surface history-page">
+          <section class="page-surface history-page" data-surface-label="Transcript timeline">
             <label class="ui-field history-search-field">
               <span class="ui-label">Search</span>
               <input id="history-search" class="ui-input" type="search" placeholder="Search transcripts" />
             </label>
-            <p id="history-empty" class="hint">No transcript history yet.</p>
+            <p id="history-empty" class="hint">No transcripts yet. Start from Home or use your shortcut.</p>
             <div id="history-feed" class="history-feed" aria-live="polite"></div>
           </section>
         </section>
@@ -305,11 +305,11 @@
                 <div class="settings-toolbar">
                   <h2>Settings</h2>
 
-                  <div class="buttons">
-                    <button id="reopen-onboarding-btn" type="button" class="ui-button ui-button-secondary">
-                      Setup guide
+                  <div class="buttons settings-actions">
+                    <button id="reopen-onboarding-btn" type="button" class="ui-button ui-button-quiet">
+                      Setup
                     </button>
-                    <button id="save-settings-btn" type="submit" class="ui-button">Save</button>
+                    <button id="save-settings-btn" type="submit" class="ui-button">Save changes</button>
                   </div>
                 </div>
 
@@ -361,7 +361,6 @@
                       <input id="playSoundCues" type="checkbox" checked />
                       <span>
                         <strong>Sound cues</strong>
-                        <span>Play start, finish, and error sounds.</span>
                       </span>
                     </label>
                   </div>
@@ -380,7 +379,7 @@
                       </div>
                       <div class="shortcut-item-body">
                         <div id="hold-shortcut-list" class="shortcut-entry-list"></div>
-                        <button id="hold-shortcut-add-btn" type="button" class="ui-button ui-button-secondary shortcut-add-btn">
+                        <button id="hold-shortcut-add-btn" type="button" class="ui-button ui-button-quiet shortcut-add-btn" aria-label="Add hold shortcut">
                           Add
                         </button>
                       </div>
@@ -393,7 +392,7 @@
                       </div>
                       <div class="shortcut-item-body">
                         <div id="toggle-shortcut-list" class="shortcut-entry-list"></div>
-                        <button id="toggle-shortcut-add-btn" type="button" class="ui-button ui-button-secondary shortcut-add-btn">
+                        <button id="toggle-shortcut-add-btn" type="button" class="ui-button ui-button-quiet shortcut-add-btn" aria-label="Add hands-free shortcut">
                           Add
                         </button>
                       </div>
@@ -408,49 +407,54 @@
                     <h3>AI</h3>
                   </div>
 
-                  <div class="settings-panel-grid">
+                  <div class="settings-panel-grid settings-panel-grid-primary">
                     <label class="ui-field">
                       <span class="ui-label">OpenAI API key</span>
                       <input id="apiKey" class="ui-input" type="password" autocomplete="off" placeholder="sk-..." required />
                     </label>
-
-                    <label class="ui-field">
-                      <span class="ui-label">API base URL</span>
-                      <input id="apiBaseUrl" class="ui-input" type="text" value="https://api.openai.com/v1" required />
-                    </label>
-
-                    <label class="ui-field">
-                      <span class="ui-label">Whisper model</span>
-                      <input id="whisperModel" class="ui-input" type="text" value="whisper-1" required />
-                    </label>
-
-                    <label class="ui-field">
-                      <span class="ui-label">Polishing model</span>
-                      <input id="formatModel" class="ui-input" type="text" value="gpt-4o-mini" required />
-                    </label>
                   </div>
 
-                  <label class="ui-field">
-                    <span class="ui-label">Transform prompt</span>
-                    <textarea id="promptTemplate" class="ui-input" rows="6" required></textarea>
-                  </label>
+                  <details class="settings-advanced">
+                    <summary>Advanced</summary>
 
-                  <label class="ui-field">
-                    <span class="ui-label">Custom vocabulary</span>
-                    <textarea
-                      id="customVocabulary"
-                      class="ui-input"
-                      rows="3"
-                      placeholder="Names, product terms, acronyms"
-                    ></textarea>
-                  </label>
+                    <div class="settings-panel-grid">
+                      <label class="ui-field">
+                        <span class="ui-label">API base URL</span>
+                        <input id="apiBaseUrl" class="ui-input" type="text" value="https://api.openai.com/v1" required />
+                      </label>
+
+                      <label class="ui-field">
+                        <span class="ui-label">Whisper model</span>
+                        <input id="whisperModel" class="ui-input" type="text" value="whisper-1" required />
+                      </label>
+
+                      <label class="ui-field">
+                        <span class="ui-label">Polishing model</span>
+                        <input id="formatModel" class="ui-input" type="text" value="gpt-4o-mini" required />
+                      </label>
+                    </div>
+
+                    <label class="ui-field">
+                      <span class="ui-label">Transform prompt</span>
+                      <textarea id="promptTemplate" class="ui-input" rows="5" required></textarea>
+                    </label>
+
+                    <label class="ui-field">
+                      <span class="ui-label">Custom vocabulary</span>
+                      <textarea
+                        id="customVocabulary"
+                        class="ui-input"
+                        rows="3"
+                        placeholder="Names, product terms, acronyms"
+                      ></textarea>
+                    </label>
+                  </details>
 
                   <div class="toggle-grid">
                     <label class="toggle-card checkbox-label">
                       <input id="formatEnabled" type="checkbox" />
                       <span>
                         <strong>Polishing</strong>
-                        <span>Clean punctuation and wording after transcription.</span>
                       </span>
                     </label>
 
@@ -458,7 +462,6 @@
                       <input id="skipFormatterInTerminals" type="checkbox" checked />
                       <span>
                         <strong>Skip polishing in terminals</strong>
-                        <span>Insert raw transcript in shell apps.</span>
                       </span>
                     </label>
 
@@ -466,7 +469,6 @@
                       <input id="includeClipboardContext" type="checkbox" checked />
                       <span>
                         <strong>Use clipboard context</strong>
-                        <span>Use copied text as optional style context.</span>
                       </span>
                     </label>
                   </div>
@@ -485,13 +487,13 @@
                       </div>
                       <p id="settings-accessibility-guidance" class="hint">Check access before recording.</p>
                       <div class="buttons">
-                        <button id="check-accessibility-btn" type="button" class="ui-button ui-button-secondary">
-                          Check again
-                        </button>
                         <button id="open-accessibility-settings-btn" type="button" class="ui-button ui-button-secondary">
                           Open Accessibility
                         </button>
-                        <button id="reset-accessibility-permission-btn" type="button" class="ui-button ui-button-secondary">
+                        <button id="check-accessibility-btn" type="button" class="ui-button ui-button-quiet">
+                          Check
+                        </button>
+                        <button id="reset-accessibility-permission-btn" type="button" class="ui-button ui-button-quiet" hidden>
                           Reset
                         </button>
                       </div>
@@ -504,11 +506,11 @@
                       </div>
                       <p id="settings-microphone-guidance" class="hint">Check access before recording.</p>
                       <div class="buttons">
-                        <button id="check-microphone-btn" type="button" class="ui-button ui-button-secondary">
-                          Check again
-                        </button>
                         <button id="open-microphone-settings-btn" type="button" class="ui-button ui-button-secondary">
                           Allow
+                        </button>
+                        <button id="check-microphone-btn" type="button" class="ui-button ui-button-quiet">
+                          Check
                         </button>
                       </div>
                       <span id="settings-microphone-status" class="hidden">Unknown</span>
@@ -522,7 +524,7 @@
                       </div>
                       <div class="buttons">
                         <button id="test-api-btn" type="button" class="ui-button ui-button-secondary">Test connection</button>
-                        <button id="copy-diagnostics-btn" type="button" class="ui-button ui-button-secondary">Copy report</button>
+                        <button id="copy-diagnostics-btn" type="button" class="ui-button ui-button-quiet" hidden>Copy report</button>
                       </div>
                       <p id="settings-api-test-status" class="hint hidden"></p>
                     </section>

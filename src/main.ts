@@ -619,6 +619,7 @@ function setApiDiagnosticsStatus(state: ApiDiagnosticsStatus['state'], message: 
   settingsApiTestStatusEl.classList.toggle('status-copy-success', state === 'passed');
   settingsApiTestStatusEl.classList.toggle('status-copy-error', state === 'failed');
   settingsApiTestStatusEl.classList.toggle('error', state === 'failed');
+  copyDiagnosticsBtn.hidden = state !== 'failed';
 }
 
 function formatDiagnosticsTime(timestampMs: number | null): string {
@@ -1577,6 +1578,10 @@ function renderAccessibilityStatus(status: AccessibilityPermissionStatus): void 
   setAccessibilityStatusSummary(label);
   settingsAccessibilityGuidanceEl.textContent = accessibilityGuidance(status);
   setPermissionUiState(settingsAccessibilityCardEl, status);
+  openAccessibilitySettingsBtn.textContent = status.is_granted ? 'Allowed' : 'Open Accessibility';
+  openAccessibilitySettingsBtn.disabled = status.is_granted || !status.is_supported;
+  checkAccessibilityBtn.hidden = status.is_granted;
+  resetAccessibilityPermissionBtn.hidden = !status.is_supported || status.is_granted;
   renderOnboardingPermissionStatuses();
   syncPermissionSetupBanner();
 }
@@ -1596,6 +1601,7 @@ function renderMicrophoneStatus(status: MicrophonePermissionStatus): void {
   const microphoneActionLabel = status.status === 'not_determined' ? 'Request access' : 'Open Microphone';
   openMicrophoneSettingsBtn.textContent = status.is_granted ? 'Allowed' : microphoneActionLabel;
   openMicrophoneSettingsBtn.disabled = status.is_granted || !status.is_supported;
+  checkMicrophoneBtn.hidden = status.is_granted;
   renderOnboardingPermissionStatuses();
   syncPermissionSetupBanner();
 }
