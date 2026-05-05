@@ -1,75 +1,51 @@
-# Verba
+<p align="center">
+  <img src="img/app-icon.png" alt="verba icon" width="96" height="96">
+</p>
 
-Open-source desktop dictation for macOS.
+<h1 align="center">verba</h1>
 
-Built for one job: press a global shortcut, speak, and get clean text inserted back into the app you were already using.
+Verba is a macOS desktop dictation app. Press a shortcut, speak, and insert the transcript back into the app you were using.
 
-![Verba screenshot](docs/github/screenshot.png)
-
-## What it does
-
-- two real shortcuts:
-  - `Hold to speak`
-  - `Hands-free start/stop`
-- Whisper-compatible transcription
-- optional LLM cleanup / formatting
-- paste back into the previously active app or terminal
-- transcript history with search and copy
-- onboarding for microphone and Accessibility permissions
-
-## Who it is for
-
-- people who want a Verba / Wispr Flow style tool they can run themselves
-- people who want control over models, prompts, API base URL, and shortcuts
-- people who want a cleaner desktop app instead of a settings-heavy dashboard
-
-## Quick start
+## Run Locally
 
 Requirements:
 
 - macOS
 - Node.js 20+
 - Rust 1.77+
+- Yarn 1.x
 
-Run locally:
+Install dependencies:
 
 ```bash
 yarn install
+```
+
+Start the dev app:
+
+```bash
 yarn tauri:dev
 ```
 
-Build:
+## Build
+
+Create the macOS app and DMG:
 
 ```bash
 yarn tauri:build
 ```
 
+The DMG is written to:
+
+```text
+src-tauri/target/release/bundle/dmg/
+```
+
 ## Permissions
 
-- `Microphone`
-- `Accessibility`
+Verba needs:
 
-Accessibility is required for cross-app text insertion.
+- Microphone, to record speech
+- Accessibility, to insert text into other apps
 
-## Config
-
-- API key
-- API base URL
-- Whisper model
-- formatter model and prompt
-- custom vocabulary
-- hold shortcut
-- hands-free shortcut
-- language
-- fast mode
-
-## Repo layout
-
-- `src/` frontend
-- `src-tauri/src/main.rs` desktop runtime and native insertion
-- `src-tauri/icons/` native app icons
-
-## Notes
-
-- API keys are user-provided and stored locally.
-- The repo includes a Cargo workaround in `.cargo/config.toml` for the Intel macOS `zerocopy` AVX512 `E0658` issue.
+In dev mode, macOS grants these permissions to the terminal app running `yarn tauri:dev`, such as Warp or Terminal.
