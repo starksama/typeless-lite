@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
+import { emit, listen } from '@tauri-apps/api/event';
 import { APP_BRAND } from './app-config';
 
 type RecordingMode = 'hold' | 'toggle';
@@ -349,6 +349,7 @@ const ONBOARDING_COMPLETED_KEY = `${APP_BRAND.storagePrefix}:onboarding-complete
 const SIDEBAR_COLLAPSED_KEY = `${APP_BRAND.storagePrefix}:sidebar-collapsed:v1`;
 const SETTINGS_SECTION_KEY = `${APP_BRAND.storagePrefix}:settings-section:v1`;
 const THEME_MODE_KEY = `${APP_BRAND.storagePrefix}:theme-mode:v1`;
+const THEME_SYNC_EVENT = 'theme-preference-changed';
 const SETTINGS_SECTION_ORDER: SettingsSection[] = ['general', 'shortcuts', 'ai'];
 const WORKSPACE_TITLES: Record<WorkspaceTab, string> = {
   home: 'Home',
@@ -405,6 +406,9 @@ function applyThemePreference(preference: ThemePreference): void {
   document.documentElement.dataset.themePreference = preference;
   document.documentElement.style.colorScheme = resolvedTheme;
   themeModeInput.value = preference;
+  if (isTauriRuntime()) {
+    void emit(THEME_SYNC_EVENT, { preference, resolvedTheme });
+  }
 }
 
 function setupThemePreference(): void {
@@ -550,6 +554,8 @@ function shouldShowIdleStatusMessage(message: string): boolean {
   const normalized = message.trim().toLowerCase();
   if (!normalized) return false;
   return (
+    normalized.includes('text captured') ||
+    normalized.includes('saved text') ||
     normalized.includes('no speech') ||
     normalized.includes('could not') ||
     normalized.includes('failed') ||
@@ -578,6 +584,9 @@ function compactRuntimeFeedbackMessage(message: string): string {
   if (!cleaned) return 'Ready';
   if (cleaned.toLowerCase().includes('no speech detected')) {
     return 'No speech detected';
+  }
+  if (cleaned.toLowerCase().includes('text captured')) {
+    return 'Text captured. Saved text available.';
   }
   const firstSentence = cleaned.match(/^[^.]+[.]?/)?.[0]?.trim();
   return firstSentence || cleaned;

@@ -45,7 +45,6 @@ const PRE_RECORDING_COPY_DELAY_MS: u64 = 80;
 const PRE_PASTE_DELAY_MS: u64 = 120;
 const TARGET_APP_REFOCUS_DELAY_MS: u64 = 120;
 const PASTE_RETRY_BACKOFF_MS: u64 = 45;
-const CLIPBOARD_RESTORE_DELAY_MS: u64 = 2_000;
 const OVERLAY_WINDOW_WIDTH: f64 = 120.0;
 const OVERLAY_WINDOW_HEIGHT: f64 = 28.0;
 const OVERLAY_WINDOW_BOTTOM_MARGIN: f64 = 24.0;
@@ -1275,6 +1274,12 @@ struct ProcessedTranscript {
     inserted: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PasteOutcome {
+    Confirmed,
+    ClipboardDispatched,
+}
+
 fn push_transcript_history_entry(
     app: &AppHandle,
     state: &State<'_, AppState>,
@@ -1359,6 +1364,10 @@ fn transcription_api_language(language: &str) -> Option<String> {
         "zh-CN" | "zh-TW" => Some("zh".to_string()),
         value => Some(value.to_string()),
     }
+}
+
+fn transcription_model_uses_instruction_prompt(model: &str) -> bool {
+    !model.trim().eq_ignore_ascii_case("whisper-1")
 }
 
 fn is_toggle_mode(settings: &Settings) -> bool {
@@ -1586,13 +1595,9 @@ fn ensure_overlay_window(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-fn destroy_overlay_window(app: &AppHandle) {
+fn hide_overlay_window_if_present(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(OVERLAY_WINDOW_LABEL) {
-        let _ = window.set_always_on_top(false);
-        let _ = window.set_visible_on_all_workspaces(false);
         hide_overlay_window(&window);
-        let _ = window.destroy();
-        eprintln!("[{}] overlay_window_destroyed", app_log_prefix());
     }
 }
 
@@ -1616,7 +1621,7 @@ fn sync_overlay_window_visibility(app: &AppHandle, status: &RuntimeStatus) {
         return;
     }
 
-    destroy_overlay_window(app);
+    hide_overlay_window_if_present(app);
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1900,23 +1905,40 @@ mod shortcut_policy_tests {
 mod transcription_prompt_tests {
     use super::{
         build_transcription_prompt, normalize_transcription_language, transcription_api_language,
+        validate_transcription_text,
     };
 
     #[test]
-    fn prompt_always_primes_mixed_language_transcription() {
-        let prompt = build_transcription_prompt("auto", "");
+    fn gpt_transcription_prompt_primes_mixed_language_transcription() {
+        let prompt = build_transcription_prompt("gpt-4o-transcribe", "auto", "")
+            .expect("gpt transcription prompt should exist");
         assert!(prompt.contains("switch languages mid-sentence"));
         assert!(prompt.contains("Do not translate or transliterate English terms"));
         assert!(prompt.contains("remove only obviously redundant filler"));
     }
 
     #[test]
-    fn prompt_includes_language_and_term_hints_without_losing_primer() {
-        let prompt = build_transcription_prompt("zh-TW", "OpenAI Whisper, TypeScript, pnpm");
+    fn gpt_prompt_includes_language_and_term_hints_without_losing_primer() {
+        let prompt = build_transcription_prompt(
+            "gpt-4o-transcribe",
+            "zh-TW",
+            "OpenAI Whisper, TypeScript, pnpm",
+        )
+        .expect("gpt transcription prompt should exist");
         assert!(prompt.contains("Primary language hint: Chinese (zh)"));
         assert!(prompt.contains("Traditional Chinese characters"));
         assert!(prompt.contains("Terminology that may appear in the audio"));
         assert!(prompt.contains("Preserve each term in the language actually spoken"));
+    }
+
+    #[test]
+    fn whisper_prompt_stays_short_and_contextual() {
+        assert!(build_transcription_prompt("whisper-1", "auto", "").is_none());
+        let prompt = build_transcription_prompt("whisper-1", "zh-TW", "OpenAI Whisper")
+            .expect("whisper should receive context hints when available");
+        assert!(prompt.contains("繁體中文"));
+        assert!(prompt.contains("OpenAI Whisper"));
+        assert!(!prompt.contains("Transcribe the audio accurately"));
     }
 
     #[test]
@@ -1926,14 +1948,36 @@ mod transcription_prompt_tests {
         assert_eq!(normalize_transcription_language("zh-Hant"), "zh-TW");
         assert_eq!(transcription_api_language("zh-CN").as_deref(), Some("zh"));
         assert_eq!(transcription_api_language("zh-TW").as_deref(), Some("zh"));
-        assert!(build_transcription_prompt("zh-CN", "").contains("Simplified Chinese characters"));
-        assert!(build_transcription_prompt("zh-TW", "").contains("Traditional Chinese characters"));
+        assert!(build_transcription_prompt("gpt-4o-transcribe", "zh-CN", "")
+            .expect("gpt prompt should exist")
+            .contains("Simplified Chinese characters"));
+        assert!(build_transcription_prompt("gpt-4o-transcribe", "zh-TW", "")
+            .expect("gpt prompt should exist")
+            .contains("Traditional Chinese characters"));
     }
 
     #[test]
     fn transcription_prompt_does_not_include_clipboard_reference() {
-        let prompt = build_transcription_prompt("auto", "Monarch, Envio");
+        let prompt = build_transcription_prompt("gpt-4o-transcribe", "auto", "Monarch, Envio")
+            .expect("gpt transcription prompt should exist");
         assert!(!prompt.contains("Reference text for terminology only"));
+    }
+
+    #[test]
+    fn rejects_repeated_transcription_hallucination() {
+        let hallucination = "All transmitted lines are modified and are rendered with the IRS Cross-Profile definition as type conditions. In the context of English, a French translation may be used, when English is the original language of a French person. In the context of English, a French translation may be used, when English is the original language of a French person. In the context of English, a French translation may be used, when English is the original language of a French person.";
+        let error = validate_transcription_text(hallucination)
+            .expect_err("repeated hallucination should be rejected");
+        assert!(error.to_string().contains("No reliable speech detected"));
+    }
+
+    #[test]
+    fn accepts_normal_repeated_words_in_transcript() {
+        let transcript = validate_transcription_text(
+            "I think the actual issue is the microphone input, input level, and the saved text behavior.",
+        )
+        .expect("normal transcript should pass");
+        assert!(transcript.contains("microphone input"));
     }
 }
 
@@ -2929,15 +2973,22 @@ async fn process_audio_pipeline(
             }),
         );
 
-        let (inserted, status_message) = match paste_text(app, &output_text, insertion_target_app.as_deref()) {
-            Ok(()) => (true, inserted_message),
-            Err(error) => (
-                false,
-                format!(
-                    "Text captured, but insertion into {insertion_destination} failed: {error}. Copy it from History or Saved text."
+        let (inserted, status_message) =
+            match paste_text(app, &output_text, insertion_target_app.as_deref()) {
+                Ok(PasteOutcome::Confirmed) => (true, inserted_message),
+                Ok(PasteOutcome::ClipboardDispatched) => (
+                    false,
+                    format!(
+                        "Text captured. Paste was sent to {insertion_destination}; if it did not appear, copy from History or Saved text."
+                    ),
                 ),
-            ),
-        };
+                Err(error) => (
+                    false,
+                    format!(
+                        "Text captured, but insertion into {insertion_destination} failed: {error}. Copy it from History or Saved text."
+                    ),
+                ),
+            };
 
         Ok::<ProcessedTranscript, AppError>(ProcessedTranscript {
             status_message,
@@ -3018,8 +3069,11 @@ async fn transcribe_audio(
     let url = format!("{}/audio/transcriptions", settings.api_base_url);
     let transcription_language = normalize_transcription_language(&settings.language);
     let api_language = transcription_api_language(&transcription_language);
-    let transcription_prompt =
-        build_transcription_prompt(&transcription_language, settings.custom_vocabulary.as_str());
+    let transcription_prompt = build_transcription_prompt(
+        &settings.whisper_model,
+        &transcription_language,
+        settings.custom_vocabulary.as_str(),
+    );
 
     for attempt in 0..API_RETRY_MAX_ATTEMPTS {
         let mut form = Form::new()
@@ -3034,7 +3088,10 @@ async fn transcribe_audio(
         if let Some(api_language) = api_language.as_ref() {
             form = form.text("language", api_language.clone());
         }
-        form = form.text("prompt", transcription_prompt.clone());
+        if let Some(transcription_prompt) = transcription_prompt.as_ref() {
+            form = form.text("prompt", transcription_prompt.clone());
+        }
+        form = form.text("temperature", "0");
 
         let response = client
             .post(&url)
@@ -3047,7 +3104,7 @@ async fn transcribe_audio(
             Ok(response) => {
                 if response.status().is_success() {
                     let parsed: TranscriptionResponse = response.json().await?;
-                    return Ok(parsed.text);
+                    return validate_transcription_text(&parsed.text);
                 }
 
                 let status = response.status();
@@ -3084,12 +3141,33 @@ async fn transcribe_audio(
     ))
 }
 
-fn build_transcription_prompt(transcription_language: &str, custom_vocabulary: &str) -> String {
+fn build_transcription_prompt(
+    model: &str,
+    transcription_language: &str,
+    custom_vocabulary: &str,
+) -> Option<String> {
     let normalized_language = normalize_transcription_language(transcription_language);
     let custom = truncate_chars(
         custom_vocabulary.trim(),
         TRANSCRIPTION_PROMPT_CONTEXT_MAX_CHARS,
     );
+
+    if !transcription_model_uses_instruction_prompt(model) {
+        let mut hints = Vec::new();
+        match normalized_language.as_str() {
+            "zh-CN" => hints.push("简体中文".to_string()),
+            "zh-TW" => hints.push("繁體中文".to_string()),
+            _ => {}
+        }
+        if !custom.is_empty() {
+            hints.push(custom);
+        }
+        return if hints.is_empty() {
+            None
+        } else {
+            Some(hints.join("\n"))
+        };
+    }
 
     let mut parts = vec![
         "Transcribe the audio accurately. The speaker may switch languages mid-sentence and may mix Chinese with English technical terms, brand names, product names, acronyms, commands, filenames, APIs, and URLs. Preserve each term in the language actually spoken. Do not translate or transliterate English terms into Chinese characters, and do not normalize mixed-language wording into a single language. Prefer a clean transcript with punctuation and remove only obviously redundant filler, repeated fragments, or stutters when the wording is clearly accidental. Do not paraphrase."
@@ -3122,11 +3200,113 @@ fn build_transcription_prompt(transcription_language: &str, custom_vocabulary: &
         ));
     }
 
-    parts.join("\n\n")
+    Some(parts.join("\n\n"))
 }
 
 fn truncate_chars(text: &str, max_chars: usize) -> String {
     text.chars().take(max_chars).collect()
+}
+
+fn validate_transcription_text(text: &str) -> Result<String, AppError> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::Message(
+            "No speech detected. Check microphone input, then try again.".to_string(),
+        ));
+    }
+    if transcription_looks_hallucinated(trimmed) {
+        return Err(AppError::Message(
+            "No reliable speech detected. Check microphone input, then try again.".to_string(),
+        ));
+    }
+    Ok(trimmed.to_string())
+}
+
+fn transcription_looks_hallucinated(text: &str) -> bool {
+    let normalized = text
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase();
+    if normalized.is_empty() {
+        return true;
+    }
+
+    let known_hallucinations = [
+        "thank you for watching",
+        "thanks for watching",
+        "like and subscribe",
+        "no speech detected",
+    ];
+    if known_hallucinations
+        .iter()
+        .any(|phrase| normalized == *phrase || normalized.matches(phrase).count() >= 2)
+    {
+        return true;
+    }
+
+    repeated_sentence_ratio(text) >= 0.58 || repeated_ngram_ratio(&normalized) >= 0.62
+}
+
+fn repeated_sentence_ratio(text: &str) -> f32 {
+    let sentences = text
+        .split(|ch| matches!(ch, '.' | '!' | '?' | '。' | '！' | '？' | '\n'))
+        .map(normalize_repetition_unit)
+        .filter(|sentence| {
+            sentence.chars().count() >= 32 || sentence.split_whitespace().count() >= 7
+        })
+        .collect::<Vec<_>>();
+    if sentences.len() < 3 {
+        return 0.0;
+    }
+
+    let mut repeated = 0_usize;
+    for (index, sentence) in sentences.iter().enumerate() {
+        if sentences
+            .iter()
+            .take(index)
+            .any(|previous| previous == sentence)
+        {
+            repeated += 1;
+        }
+    }
+    repeated as f32 / sentences.len() as f32
+}
+
+fn repeated_ngram_ratio(normalized: &str) -> f32 {
+    let tokens = normalized
+        .split_whitespace()
+        .filter(|token| token.chars().any(|ch| ch.is_alphanumeric()))
+        .collect::<Vec<_>>();
+    if tokens.len() < 18 {
+        return 0.0;
+    }
+
+    let mut repeated_tokens = 0_usize;
+    let mut total_windows = 0_usize;
+    let mut seen = HashSet::new();
+    for window in tokens.windows(6) {
+        total_windows += 1;
+        let phrase = window.join(" ");
+        if !seen.insert(phrase) {
+            repeated_tokens += 6;
+        }
+    }
+    if total_windows == 0 {
+        0.0
+    } else {
+        repeated_tokens as f32 / tokens.len() as f32
+    }
+}
+
+fn normalize_repetition_unit(text: &str) -> String {
+    text.chars()
+        .filter(|ch| ch.is_alphanumeric() || ch.is_whitespace())
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
 }
 
 fn is_retryable_status(status: reqwest::StatusCode) -> bool {
@@ -4014,7 +4194,7 @@ fn paste_text(
     app: &AppHandle,
     text: &str,
     insertion_target_app: Option<&str>,
-) -> Result<(), AppError> {
+) -> Result<PasteOutcome, AppError> {
     debug_log_handle(
         app,
         format!(
@@ -4041,7 +4221,7 @@ fn paste_text(
             match type_text_via_applescript(text) {
                 Ok(()) => {
                     debug_log_handle(app, "terminal typing fallback succeeded".to_string());
-                    return Ok(());
+                    return Ok(PasteOutcome::Confirmed);
                 }
                 Err(error) => {
                     debug_log_handle(app, format!("terminal typing fallback failed: {error}"));
@@ -4057,7 +4237,7 @@ fn paste_text(
                             detect_frontmost_app_name().as_deref().unwrap_or("unknown")
                         ),
                     );
-                    return Ok(());
+                    return Ok(PasteOutcome::Confirmed);
                 }
                 Err(error) => {
                     debug_log_handle(
@@ -4071,14 +4251,6 @@ fn paste_text(
 
     let mut clipboard =
         arboard::Clipboard::new().map_err(|e| AppError::Message(format!("Clipboard: {e}")))?;
-    let original_text = match clipboard.get_text() {
-        Ok(value) => Some(value),
-        Err(e) => {
-            eprintln!("Clipboard read failed before paste; skipping restore: {e}");
-            None
-        }
-    };
-
     clipboard
         .set_text(text.to_string())
         .map_err(|e| AppError::Message(format!("Clipboard write failed: {e}")))?;
@@ -4101,10 +4273,9 @@ fn paste_text(
         {
             let accessibility_status = check_accessibility_permission();
             if accessibility_status.is_supported && !accessibility_status.is_granted {
-                restore_clipboard_after_delay(original_text, text.to_string());
                 return Err(AppError::Message(
                     format!(
-                        "Paste failed because Accessibility permission is missing. Open System Settings > Privacy & Security > Accessibility and enable {}, then use the app's Open Accessibility Settings button to jump there.",
+                        "Paste failed because Accessibility permission is missing. The text is on the clipboard. Open System Settings > Privacy & Security > Accessibility and enable {}, then use the app's Open Accessibility Settings button to jump there.",
                         accessibility_permission_owner_label()
                     ),
                 ));
@@ -4112,11 +4283,8 @@ fn paste_text(
         }
 
         debug_log_handle(app, format!("paste keystroke failed error={error}"));
-        restore_clipboard_after_delay(original_text, text.to_string());
         return Err(error);
     }
-
-    restore_clipboard_after_delay(original_text, text.to_string());
 
     debug_log_handle(
         app,
@@ -4125,37 +4293,7 @@ fn paste_text(
             detect_frontmost_app_name().as_deref().unwrap_or("unknown")
         ),
     );
-    Ok(())
-}
-
-fn restore_clipboard_after_delay(original_text: Option<String>, temporary_text: String) {
-    let Some(original_text) = original_text else {
-        return;
-    };
-
-    thread::spawn(move || {
-        thread::sleep(Duration::from_millis(CLIPBOARD_RESTORE_DELAY_MS));
-        match arboard::Clipboard::new() {
-            Ok(mut clipboard) => {
-                // Safety guard: only restore if our temporary dictation text is still present.
-                // If the user copied something else after paste, leave their clipboard untouched.
-                match clipboard.get_text() {
-                    Ok(current_text) if current_text == temporary_text => {
-                        if let Err(e) = clipboard.set_text(original_text) {
-                            eprintln!("Clipboard restore failed: {e}");
-                        }
-                    }
-                    Ok(_) => {}
-                    Err(e) => {
-                        eprintln!("Clipboard read failed during restore; leaving clipboard unchanged: {e}");
-                    }
-                }
-            }
-            Err(e) => {
-                eprintln!("Clipboard reopen failed during restore: {e}");
-            }
-        }
-    });
+    Ok(PasteOutcome::ClipboardDispatched)
 }
 
 fn main() {
@@ -4214,6 +4352,12 @@ fn main() {
             let app_state: State<AppState> = app.state();
             #[cfg(target_os = "macos")]
             debug_log_state(&app_state, macos_runtime_identity_summary());
+            if let Err(error) = ensure_overlay_window(app.handle()) {
+                debug_log_state(
+                    &app_state,
+                    format!("startup_overlay_window_failed error={error}"),
+                );
+            }
 
             match register_shortcuts_strict(
                 app.handle(),

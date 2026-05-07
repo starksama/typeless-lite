@@ -10,11 +10,17 @@ type RuntimeStatus = {
 };
 
 type ThemePreference = 'system' | 'light' | 'dark';
+type ResolvedTheme = 'light' | 'dark';
+type ThemeSyncPayload = {
+  preference: ThemePreference;
+  resolvedTheme: ResolvedTheme;
+};
 type OverlayTone = 'idle' | 'recording' | 'processing';
 
 const pillEl = document.querySelector<HTMLDivElement>('#overlay-pill')!;
 const meterDots = Array.from(document.querySelectorAll<HTMLSpanElement>('.overlay-dot'));
 const themeModeKey = `${APP_BRAND.storagePrefix}:theme-mode:v1`;
+const themeSyncEvent = 'theme-preference-changed';
 const systemThemeQuery = window.matchMedia('(prefers-color-scheme: light)');
 let currentTone: OverlayTone | null = null;
 let visualLevel = 0;
@@ -27,15 +33,18 @@ function isThemePreference(value: string | null): value is ThemePreference {
 
 function readThemePreference(): ThemePreference {
   const stored = localStorage.getItem(themeModeKey);
-  return isThemePreference(stored) ? stored : 'system';
+  return isThemePreference(stored) ? stored : 'light';
 }
 
-function applyOverlayTheme(): void {
-  const preference = readThemePreference();
-  const resolvedTheme =
-    preference === 'system' ? (systemThemeQuery.matches ? 'light' : 'dark') : preference;
+function applyResolvedOverlayTheme(resolvedTheme: ResolvedTheme): void {
   document.documentElement.dataset.theme = resolvedTheme;
   document.documentElement.style.colorScheme = resolvedTheme;
+}
+
+function applyOverlayTheme(preference = readThemePreference()): void {
+  const resolvedTheme =
+    preference === 'system' ? (systemThemeQuery.matches ? 'light' : 'dark') : preference;
+  applyResolvedOverlayTheme(resolvedTheme);
 }
 
 function setMeter(level: number): void {
@@ -85,7 +94,7 @@ function renderOverlay(status: RuntimeStatus): void {
 
 async function boot(): Promise<void> {
   applyOverlayTheme();
-  systemThemeQuery.addEventListener('change', applyOverlayTheme);
+  systemThemeQuery.addEventListener('change', () => applyOverlayTheme());
   window.addEventListener('storage', (event) => {
     if (event.key === themeModeKey) {
       applyOverlayTheme();
@@ -93,6 +102,9 @@ async function boot(): Promise<void> {
   });
   const status = await invoke<RuntimeStatus>('get_runtime_status');
   renderOverlay(status);
+  await listen<ThemeSyncPayload>(themeSyncEvent, (event) => {
+    applyResolvedOverlayTheme(event.payload.resolvedTheme);
+  });
   await listen<RuntimeStatus>('runtime-status', (event) => {
     renderOverlay(event.payload);
   });

@@ -85,12 +85,14 @@ static void verba_prepare_overlay_window(NSWindow *window) {
   window.hasShadow = NO;
   window.ignoresMouseEvents = YES;
   window.hidesOnDeactivate = NO;
+  window.canHide = NO;
   window.contentView.wantsLayer = YES;
   window.contentView.layer.backgroundColor = NSColor.clearColor.CGColor;
   verba_make_overlay_view_transparent(window.contentView);
   window.level = NSStatusWindowLevel;
   window.collectionBehavior =
     NSWindowCollectionBehaviorCanJoinAllSpaces |
+    NSWindowCollectionBehaviorFullScreenAuxiliary |
     NSWindowCollectionBehaviorStationary |
     NSWindowCollectionBehaviorIgnoresCycle;
 }
